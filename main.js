@@ -212,7 +212,8 @@
         interpEl.innerHTML = `✅ <strong>${side} has plenty of safe options</strong>`;
         interpEl.className = 'interp neutral';
       } else if (result.grade === 'F') {
-        interpEl.innerHTML = `🎉 <strong>${side} will likely find an improving move.</strong>`;
+        const otherSide = chess.turn() === 'w' ? 'Black' : 'White';
+        interpEl.innerHTML = `🎉 <strong>${side} will likely start or continue a crushing attack against ${otherSide}</strong>`;
         interpEl.className = 'interp neutral';
       } else if (result.grade === '💀' || result.grade === '☠️') {
         interpEl.innerHTML = `💀 <strong>${side} has been checkmated</strong>`;

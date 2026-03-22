@@ -332,9 +332,17 @@ async function runPipeline(chess, workerHelper, options = {}) {
   const hasHumanFindableMate = evaluated.some(e => e.prob > 0.01 && e.evalPawns <= -20.0);
   const isLethalTrap = delta >= 4.0 && hasHumanFindableMate;
   
+  // Find the most likely Maia move to see if we possess a crushing lead
+  const topHumanMove = evaluated.length > 0 ? evaluated.reduce((prev, curr) => (curr.prob > prev.prob ? curr : prev)) : null;
+  const topHumanEval = topHumanMove ? topHumanMove.evalPawns : objectiveEval;
+
   let grade = isLethalTrap ? 'SS' : gradeFromDelta(delta, objectiveEval, isForcedMate);
   
-  // Fix scope override for the updated function call
+  // Extension: F-rank also covers D-rank where humans stay winning (+5 lead)
+  if (grade === 'D' && topHumanEval >= 5.0) {
+    grade = 'F';
+  }
+  
   if (isForcedMate && objectiveEval > 0) grade = 'F'; 
   else if (isLethalTrap) grade = 'SS';
 

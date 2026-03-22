@@ -1,0 +1,99 @@
+/**
+ * see.js — Static Exchange Evaluation
+ * Estimates the immediate net material gain/loss of a move.
+ * Used to filter out "brain-dead" blunders from Maia's probability array.
+ */
+
+const PIECE_VALUES = { p: 1, n: 3, b: 3, r: 5, q: 9, k: 0 };
+
+/**
+ * Compute the net material delta (in pawn units) of playing `move`
+ * on the given chess.js instance, from the moving side's perspective.
+ *
+ * Uses a shallow simulation: attacker captures, then opponent's cheapest
+ * attacker recaptures, and so on until no attackers remain.
+ *
+ * @param {Chess} chess  - chess.js instance (not mutated)
+ * @param {Object} move  - verbose move object from chess.moves({verbose:true})
+ * @returns {number}     - net gain in pawn units (negative = loss)
+ */
+function evaluateSEE(copy, targetSq) {
+  // Find all moves landing on the target square
+  const allMoves = copy.moves({ verbose: true });
+  const recaptures = allMoves.filter(m => m.to === targetSq);
+  if (recaptures.length === 0) return 0;
+
+  // Pick the cheapest attacker
+  recaptures.sort((a, b) => {
+    const pieceA = copy.get(a.from);
+    const pieceB = copy.get(b.from);
+    return PIECE_VALUES[pieceA.type] - PIECE_VALUES[pieceB.type];
+  });
+
+  const cheapest = recaptures[0];
+  let capturedValue = 0;
+  if (cheapest.flags.includes('e')) {
+    capturedValue = 1;
+  } else {
+    const capturedPiece = copy.get(targetSq);
+    capturedValue = capturedPiece ? PIECE_VALUES[capturedPiece.type] : 0;
+  }
+
+  // Make the recapture, evaluate the opponent's response, then undo
+  copy.move({ from: cheapest.from, to: targetSq, promotion: 'q' });
+  const oppSEE = evaluateSEE(copy, targetSq);
+  copy.undo();
+
+  // We can choose to capture (gain = capturedValue - what opponent can do)
+  // or stand pat (gain = 0).
+  return Math.max(0, capturedValue - oppSEE);
+}
+
+function computeSEE(chess, move) {
+  const copy = new Chess(chess.fen());
+  const targetSq = move.to;
+
+  let capturedValue = 0;
+  if (move.flags.includes('e')) {
+    capturedValue = 1;
+  } else {
+    const capturedPiece = copy.get(targetSq);
+    capturedValue = capturedPiece ? PIECE_VALUES[capturedPiece.type] : 0;
+  }
+
+  // Commit the initial move (cannot stand pat on the very first move)
+  copy.move({ from: move.from, to: move.to, promotion: move.promotion || 'q' });
+  const oppSEE = evaluateSEE(copy, targetSq);
+
+  return capturedValue - oppSEE;
+}
+
+/**
+ * Filter Maia's move probability list by SEE threshold, then re-normalize.
+ *
+ * @param {Chess}  chess        - current chess.js state
+ * @param {Array}  moveProbPairs - [{move: verboseMoveObj, prob: number}, ...]
+ * @param {number} threshold    - minimum acceptable SEE value (default -2.0)
+ * @returns {Array}             - filtered & re-normalized [{move, prob, see}, ...]
+ */
+function filterByPlausibility(chess, moveProbPairs, threshold = -2.0) {
+  const surviving = moveProbPairs
+    .map(pair => {
+      const see = computeSEE(chess, pair.move);
+      return { ...pair, see };
+    })
+    .filter(pair => pair.see >= threshold);
+
+  if (surviving.length === 0) {
+    // Fallback: return all if everything was filtered (shouldn't happen in practice)
+    console.warn('[SEE] All moves pruned — returning unfiltered list');
+    return moveProbPairs.map(p => ({ ...p, see: 0 }));
+  }
+
+  // Re-normalize probabilities
+  const total = surviving.reduce((s, p) => s + p.prob, 0);
+  return surviving.map(p => ({ ...p, prob: p.prob / total }));
+}
+
+// Export for use as a plain script (no ES modules needed)
+window.SEE = { computeSEE, filterByPlausibility, PIECE_VALUES };

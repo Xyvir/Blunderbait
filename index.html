@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Blunderbait Explorer</title>
+  <meta name="description"
+    content="Calculate the Blunderbait Index (BBI) of any chess position — measure how likely human moves are to blunder into a positional or tactical disaster." />
+
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap"
+    rel="stylesheet" />
+
+  <!-- chessboard.js styles -->
+  <link rel="stylesheet" href="https://unpkg.com/@chrisoakman/chessboardjs@1.0.0/dist/chessboard-1.0.0.min.css" />
+
+  <link rel="stylesheet" href="style.css" />
+</head>
+
+<body>
+
+  <!-- Fullscreen Initial Loader -->
+  <div id="app-loader" class="app-loader">
+    <div class="app-spinner"></div>
+  </div>
+
+  <!-- Toast -->
+  <div id="toast" class="toast"></div>
+
+  <!-- App Shell -->
+  <div class="app">
+
+    <!-- ── Header ─────────────────────────────────────────── -->
+    <header class="header">
+      <div class="header-left">
+        <span class="logo-icon">♟</span>
+        <div>
+          <h1 class="header-title">Blunderbait Explorer</h1>
+          <p class="header-sub">How deadly is this position for humans?</p>
+        </div>
+      </div>
+      <div class="header-right">
+        <span id="model-status" class="model-status loading">Loading model…</span>
+      </div>
+    </header>
+
+    <!-- ── Main Content ────────────────────────────────────── -->
+    <main class="main-content">
+
+      <!-- LEFT: Board + Controls -->
+      <section class="board-section">
+
+        <!-- Board -->
+        <div class="board-wrapper">
+          <div id="board" class="board-container"></div>
+          <div id="blunder-overlay" class="blunder-overlay"></div>
+        </div>
+
+        <!-- Status -->
+        <div id="status-line" class="status-line">White to move</div>
+
+        <!-- Board buttons -->
+        <div class="board-controls">
+          <button id="btn-flip" class="btn btn-secondary">⇅ Flip</button>
+          <button id="btn-undo" class="btn btn-secondary">↩ Previous</button>
+          <button id="btn-reset" class="btn btn-secondary">↺ Start Position</button>
+          <button id="btn-clear-cache" class="btn btn-secondary" title="Clear saved calculations">🗑 Clear
+            Cache</button>
+        </div>
+
+        <!-- FEN input -->
+        <div class="fen-row">
+          <input id="fen-input" class="fen-input" type="text" placeholder="Paste FEN…" spellcheck="false" />
+          <button id="btn-set-fen" class="btn btn-primary">Set Position</button>
+        </div>
+
+        <!-- Settings -->
+        <div class="settings-panel">
+          <div class="setting-row">
+            <label class="setting-label">Engine Depth</label>
+            <input id="depth-slider" type="range" min="4" max="18" value="12" class="slider" />
+            <span id="depth-label" class="setting-value">12</span>
+          </div>
+          <div class="setting-row">
+            <label class="setting-label">SEE Threshold</label>
+            <input id="see-slider" type="range" min="-5" max="0" step="0.5" value="-2" class="slider" />
+            <span id="see-label" class="setting-value">-2</span>
+          </div>
+          <div class="setting-row" style="margin-top:4px;">
+            <label class="setting-label" title="Hides evaluation hints for your side (the side on bottom) so you can evaluate moves unassisted.">Player Perspective Only</label>
+            <label class="switch">
+              <input type="checkbox" id="toggle-onesided">
+              <span class="switch-slider"></span>
+            </label>
+          </div>
+        </div>
+
+      </section>
+
+      <!-- RIGHT: Score + Heatmap -->
+      <section class="score-section">
+
+        <!-- Loading overlay -->
+        <div id="loading-indicator" class="loading-indicator hidden">
+          <div class="progress-track">
+            <div id="progress-fill" class="progress-fill"></div>
+          </div>
+          <span id="progress-text">Initializing...</span>
+        </div>
+
+        <!-- Score Panel -->
+        <div id="score-panel" class="score-panel">
+
+          <!-- Grade Badge -->
+          <div class="grade-row">
+            <div id="grade-badge" class="grade-badge">—</div>
+            <div class="grade-desc">
+              <span class="grade-title">Blunderbait Index</span>
+              <span id="delta-interp" class="interp neutral">Make a move to analyze</span>
+            </div>
+          </div>
+
+          <!-- Metrics -->
+          <div class="metrics-grid">
+            <div class="metric-card">
+              <div class="metric-label">Objective Eval</div>
+              <div id="obj-eval" class="metric-value">—</div>
+              <div class="metric-hint">Engine best play</div>
+            </div>
+            <div class="metric-card highlight">
+              <div class="metric-label">Expected Eval (EE)</div>
+              <div id="exp-eval" class="metric-value">—</div>
+              <div class="metric-hint">Prob-weighted human outcome</div>
+            </div>
+            <div class="metric-card accent">
+              <div class="metric-label" style="font-size:0.6rem;">Net Averaged Loss</div>
+              <div id="delta-eval" class="metric-value">—</div>
+              <div class="metric-hint">Objective − Expected</div>
+            </div>
+          </div>
+
+          <!-- Grade scale legend -->
+          <div class="grade-legend">
+            <div class="legend-title">Grade Scale</div>
+            <div class="legend-grid">
+              <span class="grade-pip grade-SS">SS</span><span>Human-findable forced mate</span>
+              <span class="grade-pip grade-S">S</span><span>BBI Δ ≥ +9.0 &mdash; massive blunder</span>
+              <span class="grade-pip grade-A">A</span><span>BBI Δ +5.0–+8.99 &mdash; major trap</span>
+              <span class="grade-pip grade-B">B</span><span>BBI Δ +3.0–+4.99 &mdash; significant minefield</span>
+              <span class="grade-pip grade-C">C</span><span>BBI Δ +1.5–+2.99 &mdash; moderate trap</span>
+              <span class="grade-pip grade-D">D</span><span>BBI Δ +0.0–+1.49 &mdash; humans navigate fine</span>
+              <span class="grade-pip grade-F">F</span><span>BBI Δ negative &mdash; bait backfires</span>
+            </div>
+          </div>
+
+        </div>
+
+        <!-- Move Heatmap -->
+        <div class="heatmap-panel">
+          <div class="heatmap-header">
+            <span class="heatmap-title">Human Move Probabilities</span>
+            <span class="heatmap-hint">After SEE pruning & re-normalization</span>
+          </div>
+          <div class="heatmap-scroll">
+            <table class="move-table">
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>Move</th>
+                  <th>Probability</th>
+                  <th>Eval</th>
+                </tr>
+              </thead>
+              <tbody id="move-table-body">
+                <tr>
+                  <td colspan="4" class="empty-row">No data yet</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+      </section>
+    </main>
+
+    <!-- Footer -->
+    <footer class="footer">
+      <span>BBI Calculator &mdash; Powered by Maia 1500 + Stockfish &amp; chess.js</span>
+    </footer>
+
+  </div><!-- /.app -->
+
+  <!-- ── Scripts (order matters — no ES modules for file:// compat) ── -->
+  <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+  <script src="https://unpkg.com/@chrisoakman/chessboardjs@1.0.0/dist/chessboard-1.0.0.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.10.3/chess.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/ort.min.js"></script>
+
+  <script src="see.js?v=62"></script>
+  <script src="maia.js?v=62"></script>
+  <script src="bbi.js?v=62"></script>
+  <script src="ui.js?v=62"></script>
+  <script src="main.js?v=62"></script>
+
+</body>
+
+</html>

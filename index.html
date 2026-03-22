@@ -119,8 +119,25 @@
           <div class="grade-row">
             <div id="grade-badge" class="grade-badge">—</div>
             <div class="grade-desc">
-              <span class="grade-title">Blunderbait Index</span>
-              <span id="delta-interp" class="interp neutral">Make a move to analyze</span>
+              <div class="grade-title-row">
+                <span class="grade-title">Blunderbait Index</span>
+                <div class="info-icon">
+                  <span class="icon-q">?</span>
+                  <div class="grade-tooltip">
+                    <div class="tooltip-header">Grade Scale</div>
+                    <div class="legend-grid">
+                      <span class="grade-pip grade-SS">SS</span><span>Human-findable forced mate</span>
+                      <span class="grade-pip grade-S">S</span><span>9.0+ &mdash; Player is in severe danger</span>
+                      <span class="grade-pip grade-A">A</span><span>5.0–8.99 &mdash; Player is in a minefield</span>
+                      <span class="grade-pip grade-B">B</span><span>3.0–4.99 &mdash; Player is in a tense position</span>
+                      <span class="grade-pip grade-C">C</span><span>1.5–2.99 &mdash; Player is not likely to blunder</span>
+                      <span class="grade-pip grade-D">D</span><span>0.0–1.49 &mdash; Player has plenty of safe options</span>
+                      <span class="grade-pip grade-F">F</span><span>Crushing position / bait backfires</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div id="delta-interp" class="interp neutral">Make a move to analyze</div>
             </div>
           </div>
 
@@ -140,20 +157,6 @@
               <div class="metric-label" style="font-size:0.6rem;">Net Averaged Loss</div>
               <div id="delta-eval" class="metric-value">—</div>
               <div class="metric-hint">Objective − Expected</div>
-            </div>
-          </div>
-
-          <!-- Grade scale legend -->
-          <div class="grade-legend">
-            <div class="legend-title">Grade Scale</div>
-            <div class="legend-grid">
-              <span class="grade-pip grade-SS">SS</span><span>Human-findable forced mate</span>
-              <span class="grade-pip grade-S">S</span><span>BBI Δ ≥ +9.0 &mdash; massive blunder</span>
-              <span class="grade-pip grade-A">A</span><span>BBI Δ +5.0–+8.99 &mdash; major trap</span>
-              <span class="grade-pip grade-B">B</span><span>BBI Δ +3.0–+4.99 &mdash; significant minefield</span>
-              <span class="grade-pip grade-C">C</span><span>BBI Δ +1.5–+2.99 &mdash; moderate trap</span>
-              <span class="grade-pip grade-D">D</span><span>BBI Δ +0.0–+1.49 &mdash; humans navigate fine</span>
-              <span class="grade-pip grade-F">F</span><span>BBI Δ negative &mdash; bait backfires</span>
             </div>
           </div>
 
@@ -200,11 +203,11 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.10.3/chess.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/ort.min.js"></script>
 
-  <script src="see.js?v=62"></script>
-  <script src="maia.js?v=62"></script>
-  <script src="bbi.js?v=62"></script>
-  <script src="ui.js?v=62"></script>
-  <script src="main.js?v=62"></script>
+  <script src="see.js?v=66"></script>
+  <script src="maia.js?v=66"></script>
+  <script src="bbi.js?v=66"></script>
+  <script src="ui.js?v=66"></script>
+  <script src="main.js?v=66"></script>
 
 </body>
 

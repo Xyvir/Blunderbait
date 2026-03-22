@@ -516,24 +516,73 @@ input:checked + .switch-slider:before {
 .interp.low     { background: #388bfd20; color: var(--accent-blue); }
 .interp.neutral { background: var(--bg-elevated); color: var(--text-secondary); }
 
-/* Grade legend */
-.grade-legend {
-  background: var(--bg-card);
+/* Grade Description & Tooltip */
+.grade-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.info-icon {
+  position: relative;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 1.5px solid var(--text-muted);
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: help;
+  transition: all 0.2s;
+}
+.icon-q {
+  font-size: 0.65rem;
+  font-weight: 700;
+  line-height: 1;
+}
+.info-icon:hover {
+  border-color: var(--text-primary);
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.grade-tooltip {
+  position: absolute;
+  top: 24px;
+  left: 0;
+  width: 280px;
+  background: #1a1b1e;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  padding: 14px 16px;
+  padding: 14px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  z-index: 1000;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(5px);
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  pointer-events: none;
 }
-.legend-title {
+.info-icon:hover .grade-tooltip {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
+}
+
+.tooltip-header {
   font-size: 0.72rem;
   text-transform: uppercase;
   letter-spacing: 0.1em;
   color: var(--text-secondary);
-  margin-bottom: 10px;
+  margin-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 8px;
 }
+
 .legend-grid {
   display: grid;
   grid-template-columns: 28px 1fr;
-  gap: 6px 10px;
+  gap: 8px 10px;
   align-items: center;
   font-size: 0.78rem;
   color: var(--text-secondary);

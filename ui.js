@@ -114,7 +114,7 @@ const UI = (() => {
 
   function updateScorePanel({ objectiveEval, expectedEval, delta, grade, isForcedMate, scoreMate }) {
     const turn = chess.turn();
-    const fmtAdv = v => (v >= 0 ? '↑ ' : '↓ ') + Math.abs(v).toFixed(2);
+    const fmtAdv = v => (v >= 0 ? '↑' : '↓') + Math.abs(v).toFixed(2);
     const fmtDelta = v => (v < 0 ? '-' : '') + Math.abs(v).toFixed(2);
 
     // Standard engine notation for Objective Eval: + for White, - for Black
@@ -179,7 +179,7 @@ const UI = (() => {
       const pct = (row.prob * 100).toFixed(1);
       
       const evalVal = row.evalPawns;
-      const ev = (evalVal >= 0 ? '↑ ' : '↓ ') + Math.abs(evalVal).toFixed(2);
+      const ev = (evalVal >= 0 ? '↑' : '↓') + Math.abs(evalVal).toFixed(2);
       
       const heat = probToHeat(row.prob);
       tr.innerHTML = `

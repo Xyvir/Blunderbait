@@ -24,42 +24,48 @@ const MAIA = (() => {
 
   function buildPolicyTable() {
     const table = [];
-    for (let sq = 0; sq < 64; sq++) {
-      const r = Math.floor(sq / 8), c = sq % 8;
 
-      // Queen-like moves (56 move-type slots, some go off-board)
-      for (const [dr, dc] of QUEEN_DIRS) {
-        for (let d = 1; d <= 7; d++) {
+    // QUEEN MOVES (Types 0-55: 8 directions * 7 distances)
+    // Lc0 order: Direction then Distance then Square
+    for (const [dr, dc] of QUEEN_DIRS) {
+      for (let d = 1; d <= 7; d++) {
+        for (let sq = 0; sq < 64; sq++) {
+          const r = Math.floor(sq / 8), c = sq % 8;
           const nr = r + dr * d, nc = c + dc * d;
-          if (nr < 0 || nr > 7 || nc < 0 || nc > 7) break; // further dists also off-board
-          const toSq = nr * 8 + nc;
-          // Queen promotion: pawn on leela rank 6 moving to rank 7 (straight or diagonal)
-          const promo = (r === 6 && nr === 7) ? 'q' : null;
-          table.push({ fromSq: sq, toSq, promo });
+          if (nr >= 0 && nr < 8 && nc >= 0 && nc < 8) {
+            const promo = (r === 6 && nr === 7) ? 'q' : null;
+            table.push({ fromSq: sq, toSq: nr * 8 + nc, promo });
+          }
         }
       }
+    }
 
-      // Knight moves
-      for (const [dr, dc] of KNIGHT_DELTAS) {
+    // KNIGHT MOVES (Types 56-63)
+    for (const [dr, dc] of KNIGHT_DELTAS) {
+      for (let sq = 0; sq < 64; sq++) {
+        const r = Math.floor(sq / 8), c = sq % 8;
         const nr = r + dr, nc = c + dc;
         if (nr >= 0 && nr < 8 && nc >= 0 && nc < 8) {
           table.push({ fromSq: sq, toSq: nr * 8 + nc, promo: null });
         }
       }
+    }
 
-      // Under-promotions (only from leela rank 6 → rank 7)
-      if (r === 6) {
-        for (const promo of UNDER_PROMOS) {
-          for (const dc of [-1, 0, 1]) {
-            const nc = c + dc;
-            if (nc >= 0 && nc < 8) {
-              table.push({ fromSq: sq, toSq: 7 * 8 + nc, promo });
-            }
+    // UNDER-PROMOTIONS (Types 64-72: NW, N, NE directions)
+    // Lc0 order: Direction then Piece then Square
+    for (const dc_p of [-1, 0, 1]) {
+      for (const promo_p of UNDER_PROMOS) {
+        for (let sq = 0; sq < 64; sq++) {
+          const r = Math.floor(sq / 8), c = sq % 8;
+          if (r !== 6) continue;
+          const nr = 7, nc = c + dc_p;
+          if (nc >= 0 && nc < 8) {
+            table.push({ fromSq: sq, toSq: nr * 8 + nc, promo: promo_p });
           }
         }
       }
     }
-    // Should be exactly 1858
+
     if (table.length !== 1858) {
       console.error(`[Maia] Policy table length ${table.length} ≠ 1858!`);
     }
@@ -78,7 +84,8 @@ const MAIA = (() => {
     const lf = leelaSq % 8;
     // For white: leela rank 0 = actual rank 1; for black: leela rank 0 = actual rank 8
     const actualRank0 = isBlack ? (7 - lr) : lr;
-    return FILES[lf] + (actualRank0 + 1);
+    const actualFile0 = isBlack ? (7 - lf) : lf;
+    return FILES[actualFile0] + (actualRank0 + 1);
   }
 
   function leelaMoveToUCI({ fromSq, toSq, promo }, isBlack) {
@@ -106,9 +113,9 @@ const MAIA = (() => {
         const actualRank0 = 7 - rankIdx;
         const actualFile0 = fileIdx;
 
-        // Leela square for this cell
+        // Leela square for this cell (mirror ranks AND files for black)
         const leelaRank = isBlack ? (7 - actualRank0) : actualRank0;
-        const leelaFile = actualFile0; // files not mirrored
+        const leelaFile = isBlack ? (7 - actualFile0) : actualFile0;
         const leelaSq   = leelaRank * 8 + leelaFile;
 
         // Determine plane (0-5 = us, 6-11 = them)
@@ -116,22 +123,22 @@ const MAIA = (() => {
         const plane    = (cell.color === us) ? pieceIdx : (6 + pieceIdx);
 
         tensor[plane * 64 + leelaSq] = 1.0;
+        // Plane 12: Board presence (on-board squares are 1.0)
+        tensor[12 * 64 + leelaSq] = 1.0;
       }
     }
 
     // --- Meta planes (104–111) ---
-    // 104: side to move is black
-    if (isBlack) for (let i = 0; i < 64; i++) tensor[104 * 64 + i] = 1.0;
-
-    // 105: total move count (normalized by 511)
     const fenParts   = chess.fen().split(' ');
-    const moveCount  = parseInt(fenParts[5] || '1', 10);
     const halfmove   = parseInt(fenParts[4] || '0', 10);
     const castling   = fenParts[2] || '-';
-    const moveNorm   = Math.min(moveCount / 511, 1);
-    for (let i = 0; i < 64; i++) tensor[105 * 64 + i] = moveNorm;
 
-    // 106–109: castling (ourKS, ourQS, theirKS, theirQS)
+    // 109: side to move (0.0 if White, 1.0 if Black)
+    if (isBlack) {
+      for (let i = 0; i < 64; i++) tensor[109 * 64 + i] = 1.0;
+    }
+
+    // 104-107: castling (ourKS, ourQS, theirKS, theirQS)
     const wK = castling.includes('K') ? 1 : 0;
     const wQ = castling.includes('Q') ? 1 : 0;
     const bK = castling.includes('k') ? 1 : 0;
@@ -140,17 +147,20 @@ const MAIA = (() => {
       ? [bK, bQ, wK, wQ]
       : [wK, wQ, bK, bQ];
     for (let p = 0; p < 4; p++) {
-      if (castleValues[p]) for (let i = 0; i < 64; i++) tensor[(106 + p) * 64 + i] = 1.0;
+      if (castleValues[p]) {
+        for (let i = 0; i < 64; i++) tensor[(104 + p) * 64 + i] = 1.0;
+      }
     }
 
-    // 110: 50-move counter (normalized by 99)
+    // 108: 50-move rule counter (normalized by 99)
     const halfNorm = Math.min(halfmove / 99, 1);
-    for (let i = 0; i < 64; i++) tensor[110 * 64 + i] = halfNorm;
+    for (let i = 0; i < 64; i++) tensor[108 * 64 + i] = halfNorm;
 
-    // 111: en passant available
-    if (fenParts[3] && fenParts[3] !== '-') {
-      for (let i = 0; i < 64; i++) tensor[111 * 64 + i] = 1.0;
-    }
+    // 111: all ones (constant plane)
+    for (let i = 0; i < 64; i++) tensor[111 * 64 + i] = 1.0;
+
+    // 105 used for move count in previous attempt? No, 112-plane usually doesn't include it like that.
+    // 105 is now part of castling rights above (104-107).
 
     return tensor;
   }

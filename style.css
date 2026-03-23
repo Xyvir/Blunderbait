@@ -18,6 +18,7 @@
   --text-muted:   #484f58;
   --accent-blue:  #388bfd;
   --accent-teal:  #39d353;
+  --accent-green: var(--accent-teal);
   --accent-amber: #d29922;
   --accent-red:   #f85149;
   --accent-purple:#a371f7;
@@ -497,6 +498,32 @@ input:checked + .switch-slider:before {
 .metric-card:hover { transform: translateY(-2px); box-shadow: var(--shadow-md); }
 .metric-card.highlight { border-color: var(--accent-blue); background: #388bfd0d; }
 .metric-card.accent    { border-color: var(--accent-amber); background: #d299220d; }
+.metric-card.metric-card-purple { border-color: var(--accent-purple) !important; }
+
+#obj-eval {
+  /* Standard 4-way purple outline with a White highlight shadow on the bottom-right */
+  text-shadow: 
+    -0.8px -0.8px 0 var(--accent-purple),  
+     0.8px -0.8px 0 var(--accent-purple),
+    -0.8px  0.8px 0 var(--accent-purple),
+     0.8px  0.8px 0 var(--accent-purple),
+     1px 1px 1px #ffffff;
+  transition: color 0.15s;
+}
+#obj-eval.text-white { color: #ffffff; }
+#obj-eval.text-black { color: #444444; }
+
+#delta-eval {
+  color: var(--accent-amber);
+  /* Darker orange outline with a White highlight shadow on the bottom-right */
+  text-shadow: 
+    -0.8px -0.8px 0 #8c6616,  
+     0.8px -0.8px 0 #8c6616,
+    -0.8px  0.8px 0 #8c6616,
+     0.8px  0.8px 0 #8c6616,
+     1px 1px 1px #ffffff;
+}
+
 .metric-label { font-size: 0.72rem; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.08em; }
 .metric-value { font-size: 1.5rem; font-weight: 600; font-family: var(--font-mono); color: var(--text-primary); transition: color 0.2s; }
 .metric-value.eval-pos { color: var(--accent-green); text-shadow: 0 0 15px #2ea04340; }

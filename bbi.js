@@ -29,24 +29,7 @@ const BBICache = (() => {
   let dbPromise = null;
   const memCache = new Map();
 
-  // Pre-load the starting position evaluation so the first visit is instantaneous
-  memCache.set('rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1', {
-    objectiveEval: 1.16,
-    expectedEval: -0.79,
-    delta: 1.95,
-    grade: 'C',
-    isForcedMate: false,
-    fen: 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1',
-    moveTable: [
-      { san: 'g4', uci: 'g2g4', color: 'w', piece: 'p', prob: 0.208, evalPawns: -1.84, cpLoss: 3.00 },
-      { san: 'd4', uci: 'd2d4', color: 'w', piece: 'p', prob: 0.165, evalPawns: 0.18, cpLoss: 0.98 },
-      { san: 'Na3', uci: 'b1a3', color: 'w', piece: 'n', prob: 0.094, evalPawns: -1.38, cpLoss: 2.54 },
-      { san: 'b3', uci: 'b2b3', color: 'w', piece: 'p', prob: 0.089, evalPawns: -1.03, cpLoss: 2.19 },
-      { san: 'Nf3', uci: 'g1f3', color: 'w', piece: 'n', prob: 0.077, evalPawns: 0.03, cpLoss: 1.13 },
-      { san: 'e4', uci: 'e2e4', color: 'w', piece: 'p', prob: 0.074, evalPawns: 0.27, cpLoss: 0.89 },
-      { san: 'Nh3', uci: 'g1h3', color: 'w', piece: 'n', prob: 0.069, evalPawns: -1.19, cpLoss: 2.35 }
-    ]
-  });
+  // Pre-loading of starting position removed to ensure evaluation sync and engine consistency.
 
   function initDB() {
     if (!window.indexedDB) return Promise.reject('No IDB');
@@ -181,7 +164,8 @@ class WorkerHelper {
       const job = {
         resolve, score_cp: null, score_mate: null, pv: '', bestmove: null,
         start(sf) {
-          sf.postMessage('ucinewgame');
+          // REMOVED: sf.postMessage('ucinewgame'); — calling ucinewgame before every search destroys the Transposition Table (Hash) 
+          // and causes massive instability in move evaluations at low depth.
           if (move) {
             sf.postMessage(`position fen ${fen} moves ${move}`);
           } else {
@@ -321,11 +305,17 @@ async function runPipeline(chess, workerHelper, options = {}) {
   const evaluated = await Promise.all(evalPromises);
   console.log(`[BBI] Evaluated ${evaluated.length} moves with Stockfish`);
 
+  // --- Step 4.5: Re-sync Objective Evaluation ---
+  // If individualized move searches found a better result than the root search, use that as the baseline.
+  // This ensures the dashboard doesn't contradict the move list.
+  const bestMoveVal = evaluated.length > 0 ? evaluated.reduce((max, e) => (e.evalPawns > max ? e.evalPawns : max), -30.0) : objectiveEval;
+  const syncedObjectiveEval = (Math.abs(bestMoveVal - objectiveEval) > 0.05) ? bestMoveVal : objectiveEval;
+
   // --- Step 5: Expected Evaluation ---
   const expectedEval = evaluated.reduce((sum, e) => sum + e.prob * e.evalPawns, 0);
 
   // --- Step 6: BBI Delta ---
-  const delta = objectiveEval - expectedEval;
+  const delta = syncedObjectiveEval - expectedEval;
 
   // --- Step 7: Grade ---
   // Check if humans have >= 1% chance of blundering into a forced mate (eval drops to -30)
@@ -357,11 +347,13 @@ async function runPipeline(chess, workerHelper, options = {}) {
     prob:      e.prob,
     see:       e.see,
     evalPawns: e.evalPawns,
+    evalAbs:   isWhiteTurn ? e.evalPawns : -e.evalPawns, // White-relative for consistent dashboard display
+    scoreMate: e.score_mate,
     weighted:  e.prob * e.evalPawns,
-    cpLoss:    Math.max(0, objectiveEval - e.evalPawns), // pawn units lost vs best play
+    cpLoss:    Math.max(0, syncedObjectiveEval - e.evalPawns), // pawn units lost vs best play
   }));
 
-  const finalResult = { objectiveEval, expectedEval, delta, grade, moveTable, fen, isForcedMate, bestmove: objResult.bestmove };
+  const finalResult = { objectiveEval: syncedObjectiveEval, expectedEval, delta, grade, moveTable, fen, isForcedMate, scoreMate: objResult.score_mate, bestmove: objResult.bestmove };
   
   // Save to cache
   await BBICache.set(fen, finalResult);

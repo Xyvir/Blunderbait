@@ -18,21 +18,7 @@
   const chess = new Chess();
   const workerHelper = new BBI.WorkerHelper();
 
-  // Helper to re-seed start pos baseline cache
-  async function seedStartPos() {
-    try {
-      const startFen = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
-      if (!await BBI.Cache.get(startFen)) {
-        const res = await fetch('startpos.json');
-        if (res.ok) {
-          const data = await res.json();
-          await BBI.Cache.set(startFen, data);
-        }
-      }
-    } catch (e) { console.warn("Could not load startpos.json config"); }
-  }
-
-  await seedStartPos();
+  // Seeding of startpos.json removed to ensure evaluation sync and engine consistency.
 
   // -------------------------------------------------------------------------
   // Initialize chessboard UI
@@ -82,7 +68,6 @@
   document.getElementById('btn-undo').addEventListener('click', () => UI.undoMove());
   document.getElementById('btn-clear-cache').addEventListener('click', async () => {
     await BBI.Cache.clear();
-    await seedStartPos(); // Restore the baseline so the UI doesn't lag out on frame 1
     UI.resetBoard();
     UI.clearBlunderOverlay();
     UI.showToast('Memory wiped and returned to Start', 'success');

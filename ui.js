@@ -112,14 +112,36 @@ const UI = (() => {
     }
   }
 
-  function updateScorePanel({ objectiveEval, expectedEval, delta, grade, isForcedMate }) {
-    const fmtAdv = v => (v >= 0 ? '↑' : '↓') + Math.abs(v).toFixed(2);
+  function updateScorePanel({ objectiveEval, expectedEval, delta, grade, isForcedMate, scoreMate }) {
+    const turn = chess.turn();
+    const fmtAdv = v => (v >= 0 ? '↑ ' : '↓ ') + Math.abs(v).toFixed(2);
     const fmtDelta = v => (v < 0 ? '-' : '') + Math.abs(v).toFixed(2);
 
-    const objEl = document.getElementById('obj-eval');
-    objEl.textContent = isForcedMate && objectiveEval > 0 ? 'Forced Mate' : fmtAdv(objectiveEval);
-    objEl.className = 'metric-value ' + (isForcedMate && objectiveEval > 0 ? 'eval-pos' : (objectiveEval >= 0 ? 'eval-pos' : 'eval-neg'));
+    // Standard engine notation for Objective Eval: + for White, - for Black
+    const absObj = (turn === 'w') ? objectiveEval : -objectiveEval;
+    const absMate = (turn === 'w') ? (scoreMate || 0) : -(scoreMate || 0);
 
+    let objValText;
+    if (isForcedMate && scoreMate !== undefined && scoreMate !== null) {
+      const sign = absMate > 0 ? '+' : (absMate < 0 ? '-' : '');
+      objValText = sign + 'M' + Math.abs(absMate);
+    } else {
+      const objSign = absObj > 0 ? '+' : (absObj < 0 ? '-' : '');
+      objValText = objSign + Math.abs(absObj).toFixed(2);
+    }
+
+    const objEl = document.getElementById('obj-eval');
+    objEl.textContent = objValText;
+    
+    // Manage advantage styling (side-neutral White vs Black)
+    const objCard = objEl.parentElement;
+    objCard.classList.add('metric-card-purple');
+    
+    objEl.classList.remove('text-white', 'text-black');
+    if (absObj > 0.3)      objEl.classList.add('text-white');
+    else if (absObj < -0.3) objEl.classList.add('text-black');
+
+    // Expected Eval remains side-to-move relative (standard for "Human Outcome")
     const expEl = document.getElementById('exp-eval');
     expEl.textContent = fmtAdv(expectedEval);
     expEl.className = 'metric-value ' + (expectedEval >= 0 ? 'eval-pos' : 'eval-neg');
@@ -133,7 +155,12 @@ const UI = (() => {
 
   function clearScorePanel() {
     ['obj-eval', 'exp-eval', 'delta-eval'].forEach(id => {
-      document.getElementById(id).textContent = '—';
+      const el = document.getElementById(id);
+      el.textContent = '—';
+      if (id === 'obj-eval') {
+        el.parentElement.classList.remove('metric-card-purple');
+        el.classList.remove('text-white', 'text-black');
+      }
     });
     const g = document.getElementById('grade-badge');
     g.textContent = '—';
@@ -150,9 +177,11 @@ const UI = (() => {
     moveTable.forEach((row, i) => {
       const tr = document.createElement('tr');
       const pct = (row.prob * 100).toFixed(1);
-      const ev = (row.evalPawns >= 0 ? '↑' : '↓') + Math.abs(row.evalPawns).toFixed(2);
+      
+      const evalVal = row.evalPawns;
+      const ev = (evalVal >= 0 ? '↑ ' : '↓ ') + Math.abs(evalVal).toFixed(2);
+      
       const heat = probToHeat(row.prob);
-
       tr.innerHTML = `
         <td class="rank">${i + 1}</td>
         <td class="move-san">${row.san}</td>
@@ -160,7 +189,7 @@ const UI = (() => {
           <div class="prob-bar" style="width:${pct}%; background:${heat}"></div>
           <span class="prob-label">${pct}%</span>
         </td>
-        <td class="eval-cell ${row.evalPawns >= 0 ? 'pos' : 'neg'}">${ev}</td>
+        <td class="eval-cell ${evalVal >= 0 ? 'pos' : 'neg'}">${ev}</td>
       `;
       tbody.appendChild(tr);
     });
@@ -271,10 +300,10 @@ const UI = (() => {
         const badge = document.createElement('div');
         badge.className = 'blunder-badge';
 
-        const avgLoss = group.reduce((sum, m) => sum + m.cpLoss, 0) / group.length;
-        let pawnsDisplay = '↓' + avgLoss.toFixed(1).replace(/\.0$/, '');
+        const avgEval = group.reduce((sum, m) => sum + m.evalPawns, 0) / group.length;
+        let evalTxt = (avgEval >= 0 ? '↑' : '↓') + Math.abs(avgEval).toFixed(1).replace(/\.0$/, '');
 
-        badge.innerHTML = `<span class="blunder-emoji">💥</span><span class="blunder-cp">${pawnsDisplay}</span>`;
+        badge.innerHTML = `<span class="blunder-emoji">💥</span><span class="blunder-cp">${evalTxt}</span>`;
         marker.appendChild(badge);
 
       } else if (data.grade) {

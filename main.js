@@ -135,7 +135,10 @@
       const depth = parseInt(document.getElementById('depth-slider').value, 10);
       const seeThreshold = parseFloat(document.getElementById('see-slider').value);
 
-      const result = await BBI.runPipeline(chess, workerHelper, {
+      // Clone the board to isolate this pipeline run from future UI mutations (e.g. Undo, Next Move)
+      const pipelineChess = new Chess(currentFen);
+
+      const result = await BBI.runPipeline(pipelineChess, workerHelper, {
         seeThreshold, depth,
         onProgress: (pct) => {
           if (currentPipelineId === pipelineId) UI.updateProgress(pct);

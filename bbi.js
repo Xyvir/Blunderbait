@@ -258,8 +258,18 @@ async function runPipeline(chess, workerHelper, options = {}) {
   console.log(`[BBI] Sourced from ${source}: ${rawProbs.length} moves. WinProb: ${(winProb * 100).toFixed(1)}%`);
 
   // --- Step 2: SEE Plausibility Filter ---
-  const plausible = SEE.filterByPlausibility(chess, rawProbs, seeThreshold);
+  let plausible = SEE.filterByPlausibility(chess, rawProbs, seeThreshold);
   console.log(`[SEE] ${plausible.length} moves survived (threshold: ${seeThreshold})`);
+
+  // --- Step 2.5: Human Probability Pruning ---
+  // Prune moves with <= 0.5% probability after initial re-normalization to clean up UI/Expected Eval
+  const probThreshold = 0.005;
+  const significant = plausible.filter(p => p.prob > probThreshold);
+  if (significant.length > 0 && significant.length < plausible.length) {
+    console.log(`[BBI] Pruning ${plausible.length - significant.length} low-probability moves (<= 0.5%)`);
+    const totalProb = significant.reduce((sum, p) => sum + p.prob, 0);
+    plausible = significant.map(p => ({ ...p, prob: p.prob / totalProb }));
+  }
 
   // --- Step 3 & 4 Progress tracking ---
   const movesToEval = plausible.slice(0, maxMoves);

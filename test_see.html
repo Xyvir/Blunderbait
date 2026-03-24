@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>SEE Hanging Test</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.10.3/chess.min.js"></script>
+    <script src="see.js"></script>
+</head>
+<body>
+    <script>
+        const fen = 'rnb1kbnr/pppp1ppp/8/4p1q1/3P4/8/PPP1PP1P/RNBQKBNR b KQkq -';
+        const chess = new Chess(fen);
+        
+        console.log("Testing FEN:", fen);
+        console.log("Black to move. Queen on g5 is hanging (unprotected, attacked by Bc1).");
+
+        const moves = chess.moves({ verbose: true });
+        const moveProbPairs = moves.map(m => ({ move: m, prob: 1 / moves.length }));
+
+        console.log("\n--- SEE Results with Global Hanging Detection ---");
+        const results = moveProbPairs.map(p => {
+            const copy = new Chess(fen);
+            copy.move(p.move);
+            const moveSee = SEE.computeSEE(new Chess(fen), p.move);
+            // Manually call getHangingPenalty to see what it detects
+            const penalty = (function getHangingPenalty(chess) {
+                const opponentMoves = chess.moves({ verbose: true });
+                let maxGain = 0;
+                for (const m of opponentMoves) {
+                    if (m.captured) {
+                        const gain = SEE.computeSEE(chess, m);
+                        if (gain > maxGain) maxGain = gain;
+                    }
+                }
+                return maxGain;
+            })(copy);
+            
+            return {
+                san: p.move.san,
+                moveSee,
+                penalty,
+                effectiveSee: moveSee - penalty
+            };
+        });
+
+        results.sort((a, b) => b.effectiveSee - a.effectiveSee);
+        results.forEach(r => {
+            console.log(`Move: ${r.san.padEnd(5)} | Local SEE: ${r.moveSee} | Penalty: ${r.penalty} | Effective: ${r.effectiveSee}`);
+        });
+
+        const threshold = -1.5;
+        const filtered = SEE.filterByPlausibility(chess, moveProbPairs, threshold);
+        console.log(`\nFiltered results (Threshold ${threshold}):`);
+        filtered.forEach(f => {
+            console.log(`  - ${f.move.san} (SEE: ${f.see.toFixed(1)})`);
+        });
+
+        const d6 = filtered.find(f => f.move.san === 'd6');
+        const qf5 = filtered.find(f => f.move.san === 'Qf5');
+
+        if (!d6 && qf5) {
+            console.log("\n✅ SUCCESS: 'd6' was pruned, but 'Qf5' survived.");
+        } else {
+            console.error("\n❌ FAILURE: Check pruning logic.");
+        }
+    </script>
+</body>
+</html>

@@ -1,165 +1,240 @@
 /**
  * maia.js — Maia ONNX Inference Helper
  *
- * Loads a Maia chess model (lc0-format ONNX) and returns human move
- * probabilities for a given chess.js position.
- *
- * Input tensor: [1, 112, 8, 8] float32 — standard Leela encoding
- * Output: policy head [1, 1858] (move probabilities, softmax not applied by model)
- *
- * Model file: ./models/maia-1500.onnx  (place it there before running)
+ * Supports both:
+ * 1. Maia 1 (Lc0 style): 112 planes, [1, 1858] policy output.
+ * 2. Maia 2 / Rapid: 18 planes, [1, 1968] policy output, 3 inputs (boards, elo_self, elo_oppo).
  */
 
 const MAIA = (() => {
   // -------------------------------------------------------------------------
-  // Leela policy index → {fromSq, toSq, promo}  (1858 entries)
-  // All squares in "current player's perspective" space:
-  //   sq = leela_rank * 8 + leela_file
-  //   leela_rank 0 = current player's back rank
-  //   files 0–7 = a–h (files are NOT mirrored)
+  // 1. Policy Tables
   // -------------------------------------------------------------------------
-  const QUEEN_DIRS   = [[1,0],[1,1],[0,1],[-1,1],[-1,0],[-1,-1],[0,-1],[1,-1]];
-  const KNIGHT_DELTAS = [[2,1],[1,2],[-1,2],[-2,1],[-2,-1],[-1,-2],[1,-2],[2,-1]];
-  const UNDER_PROMOS  = ['n','b','r'];
 
-  function buildPolicyTable() {
+  function buildLeelaPolicyTable() {
     const table = [];
-    for (let sq = 0; sq < 64; sq++) {
-      const r = Math.floor(sq / 8), c = sq % 8;
+    const queenDirs = [[1, 0], [1, 1], [0, 1], [-1, 1], [-1, 0], [-1, -1], [0, -1], [1, -1]];
+    const knightDirs = [[2, -1], [2, 1], [1, 2], [-1, 2], [-2, 1], [-2, -1], [-1, -2], [1, -2]];
+    const promoDirs = [[1, -1], [1, 0], [1, 1]];
+    const promoPieces = ['n', 'b', 'r'];
 
-      // Queen-like moves (56 move-type slots, some go off-board)
-      for (const [dr, dc] of QUEEN_DIRS) {
-        for (let d = 1; d <= 7; d++) {
-          const nr = r + dr * d, nc = c + dc * d;
-          if (nr < 0 || nr > 7 || nc < 0 || nc > 7) break; // further dists also off-board
-          const toSq = nr * 8 + nc;
-          // Queen promotion: pawn on leela rank 6 moving to rank 7 (straight or diagonal)
-          const promo = (r === 6 && nr === 7) ? 'q' : null;
-          table.push({ fromSq: sq, toSq, promo });
+    for (let fromSq = 0; fromSq < 64; fromSq++) {
+      const r1 = Math.floor(fromSq / 8);
+      const c1 = fromSq % 8;
+      for (const [dr, dc] of queenDirs) {
+        for (let dist = 1; dist <= 7; dist++) {
+          const r2 = r1 + dr * dist;
+          const c2 = c1 + dc * dist;
+          if (r2 >= 0 && r2 < 8 && c2 >= 0 && c2 < 8) table.push({ fromSq, toSq: r2 * 8 + c2, promo: null });
         }
       }
-
-      // Knight moves
-      for (const [dr, dc] of KNIGHT_DELTAS) {
-        const nr = r + dr, nc = c + dc;
-        if (nr >= 0 && nr < 8 && nc >= 0 && nc < 8) {
-          table.push({ fromSq: sq, toSq: nr * 8 + nc, promo: null });
-        }
+      for (const [dr, dc] of knightDirs) {
+        const r2 = r1 + dr;
+        const c2 = c1 + dc;
+        if (r2 >= 0 && r2 < 8 && c2 >= 0 && c2 < 8) table.push({ fromSq, toSq: r2 * 8 + c2, promo: null });
       }
-
-      // Under-promotions (only from leela rank 6 → rank 7)
-      if (r === 6) {
-        for (const promo of UNDER_PROMOS) {
-          for (const dc of [-1, 0, 1]) {
-            const nc = c + dc;
-            if (nc >= 0 && nc < 8) {
-              table.push({ fromSq: sq, toSq: 7 * 8 + nc, promo });
-            }
+      if (r1 === 6) {
+        for (const piece of promoPieces) {
+          for (const [dr, dc] of promoDirs) {
+            const r2 = r1 + dr;
+            const c2 = c1 + dc;
+            if (r2 === 7 && c2 >= 0 && c2 < 8) table.push({ fromSq, toSq: r2 * 8 + c2, promo: piece });
           }
         }
       }
     }
-    // Should be exactly 1858
-    if (table.length !== 1858) {
-      console.error(`[Maia] Policy table length ${table.length} ≠ 1858!`);
+    return table;
+  }
+
+  function buildMaia2PolicyTable() {
+    const table = [];
+    const FILES = 'abcdefgh';
+    // We use a clean chess for finding all potential moves of a piece on a square
+    // This replicates python-chess's move generation for empty boards
+    const chess = new Chess();
+
+    for (let rank = 0; rank < 8; rank++) {
+      for (let file = 0; file < 8; file++) {
+        const fromSq = FILES[file] + (rank + 1);
+        
+        // Queen moves (matches all_moves.extend(legal_moves) with Queen)
+        chess.clear();
+        chess.put({ type: 'q', color: 'w' }, fromSq);
+        let moves = chess.moves({ verbose: true });
+        moves.sort((a, b) => {
+          const rA = parseInt(a.to[1]) - 1;
+          const fA = a.to.charCodeAt(0) - 97;
+          const rB = parseInt(b.to[1]) - 1;
+          const fB = b.to.charCodeAt(0) - 97;
+          return (rA * 8 + fA) - (rB * 8 + fB);
+        });
+        moves.forEach(m => table.push(m.from + m.to));
+
+        // Knight moves (matches all_moves.extend(legal_moves) with Knight)
+        chess.clear();
+        chess.put({ type: 'n', color: 'w' }, fromSq);
+        moves = chess.moves({ verbose: true });
+        moves.sort((a, b) => {
+          const rA = parseInt(a.to[1]) - 1;
+          const fA = a.to.charCodeAt(0) - 97;
+          const rB = parseInt(b.to[1]) - 1;
+          const fB = b.to.charCodeAt(0) - 97;
+          return (rA * 8 + fA) - (rB * 8 + fB);
+        });
+        moves.forEach(m => table.push(m.from + m.to));
+      }
+    }
+
+    // Pawn Promotions (matches generate_pawn_promotions() in main.py)
+    const promoPieces = ['q', 'r', 'b', 'n'];
+    for (let fIdx = 0; fIdx < 8; fIdx++) {
+      const f = FILES[fIdx];
+      // Direct
+      promoPieces.forEach(p => table.push(`${f}7${f}8${p}`));
+      // Left capture
+      if (fIdx > 0) {
+        const lf = FILES[fIdx - 1];
+        promoPieces.forEach(p => table.push(`${f}7${lf}8${p}`));
+      }
+      // Right capture
+      if (fIdx < 7) {
+        const rf = FILES[fIdx + 1];
+        promoPieces.forEach(p => table.push(`${f}7${rf}8${p}`));
+      }
     }
     return table;
   }
 
-  const POLICY_TABLE = buildPolicyTable();
+  const LEELA_POLICY = buildLeelaPolicyTable();
+  const MAIA2_POLICY = buildMaia2PolicyTable();
 
   // -------------------------------------------------------------------------
-  // Leela square ↔ algebraic conversions
+  // 2. Encoding Helpers
   // -------------------------------------------------------------------------
-  const FILES = 'abcdefgh';
 
-  function leelaSqToAlg(leelaSq, isBlack) {
-    const lr = Math.floor(leelaSq / 8);
-    const lf = leelaSq % 8;
-    // For white: leela rank 0 = actual rank 1; for black: leela rank 0 = actual rank 8
-    const actualRank0 = isBlack ? (7 - lr) : lr;
-    return FILES[lf] + (actualRank0 + 1);
+  function mirrorFEN(fen) {
+    const parts = fen.split(' ');
+    const rows = parts[0].split('/');
+    const mirroredRows = rows.reverse().map(row => {
+      return row.split('').map(c => {
+        if (c >= 'a' && c <= 'z') return c.toUpperCase();
+        if (c >= 'A' && c <= 'Z') return c.toLowerCase();
+        return c;
+      }).join('');
+    });
+    parts[0] = mirroredRows.join('/');
+    parts[1] = (parts[1] === 'w') ? 'b' : 'w';
+    let castling = parts[2];
+    let newCastling = '';
+    if (castling.includes('k')) newCastling += 'K';
+    if (castling.includes('q')) newCastling += 'Q';
+    if (castling.includes('K')) newCastling += 'k';
+    if (castling.includes('Q')) newCastling += 'q';
+    parts[2] = newCastling || '-';
+    if (parts[3] && parts[3] !== '-') {
+      const file = parts[3][0];
+      const rank = parseInt(parts[3][1]);
+      parts[3] = file + (9 - rank);
+    }
+    return parts.join(' ');
   }
 
-  function leelaMoveToUCI({ fromSq, toSq, promo }, isBlack) {
-    return leelaSqToAlg(fromSq, isBlack) + leelaSqToAlg(toSq, isBlack) + (promo || '');
+  function mirrorMove(uci) {
+    const mirrorSq = sq => sq[0] + (9 - parseInt(sq[1]));
+    return mirrorSq(uci.slice(0, 2)) + mirrorSq(uci.slice(2, 4)) + uci.slice(4);
   }
 
-  // -------------------------------------------------------------------------
-  // Board encoding → 112-plane float32 tensor
-  // -------------------------------------------------------------------------
-  const PIECE_ORDER = ['p', 'n', 'b', 'r', 'q', 'k'];
+  function mapEloToCategory(elo) {
+    const start = 1100, end = 2000, interval = 100;
+    if (elo < start) return 0;
+    if (elo >= end) return 10;
+    return Math.floor((elo - start) / interval) + 1;
+  }
 
-  function encodeBoard(chess) {
+  function encodeLeela(chess) {
     const isBlack = chess.turn() === 'b';
     const us = chess.turn();
-    const tensor = new Float32Array(112 * 64); // [112, 8, 8] flattened
+    const tensor = new Float32Array(112 * 64);
+    const board = chess.board();
+    const PIECE_ORDER = ['p', 'n', 'b', 'r', 'q', 'k'];
 
-    const board = chess.board(); // board[rankIdx][fileIdx], rankIdx 0 = rank 8
-
-    for (let rankIdx = 0; rankIdx < 8; rankIdx++) {
-      for (let fileIdx = 0; fileIdx < 8; fileIdx++) {
-        const cell = board[rankIdx][fileIdx];
+    for (let r = 0; r < 8; r++) {
+      for (let f = 0; f < 8; f++) {
+        const cell = board[r][f];
         if (!cell) continue;
-
-        // Actual 0-indexed rank (0=rank1, 7=rank8)
-        const actualRank0 = 7 - rankIdx;
-        const actualFile0 = fileIdx;
-
-        // Leela square for this cell
+        const actualRank0 = 7 - r;
         const leelaRank = isBlack ? (7 - actualRank0) : actualRank0;
-        const leelaFile = actualFile0; // files not mirrored
-        const leelaSq   = leelaRank * 8 + leelaFile;
-
-        // Determine plane (0-5 = us, 6-11 = them)
+        const leelaFile = isBlack ? (7 - f) : f;
+        const y = 7 - leelaRank, x = leelaFile;
+        const tensorIdx = y * 8 + x;
         const pieceIdx = PIECE_ORDER.indexOf(cell.type);
-        const plane    = (cell.color === us) ? pieceIdx : (6 + pieceIdx);
-
-        tensor[plane * 64 + leelaSq] = 1.0;
+        const plane = (cell.color === us) ? pieceIdx : (6 + pieceIdx);
+        tensor[plane * 64 + tensorIdx] = 1.0;
       }
     }
-
-    // --- Meta planes (104–111) ---
-    // 104: side to move is black
     if (isBlack) for (let i = 0; i < 64; i++) tensor[104 * 64 + i] = 1.0;
-
-    // 105: total move count (normalized by 511)
-    const fenParts   = chess.fen().split(' ');
-    const moveCount  = parseInt(fenParts[5] || '1', 10);
-    const halfmove   = parseInt(fenParts[4] || '0', 10);
-    const castling   = fenParts[2] || '-';
-    const moveNorm   = Math.min(moveCount / 511, 1);
+    const fenParts = chess.fen().split(' ');
+    const moveCount = parseInt(fenParts[5] || '1', 10);
+    const halfmove = parseInt(fenParts[4] || '0', 10);
+    const castling = fenParts[2] || '-';
+    const moveNorm = Math.min(moveCount / 511, 1);
     for (let i = 0; i < 64; i++) tensor[105 * 64 + i] = moveNorm;
-
-    // 106–109: castling (ourKS, ourQS, theirKS, theirQS)
-    const wK = castling.includes('K') ? 1 : 0;
-    const wQ = castling.includes('Q') ? 1 : 0;
-    const bK = castling.includes('k') ? 1 : 0;
-    const bQ = castling.includes('q') ? 1 : 0;
-    const castleValues = isBlack
-      ? [bK, bQ, wK, wQ]
-      : [wK, wQ, bK, bQ];
-    for (let p = 0; p < 4; p++) {
-      if (castleValues[p]) for (let i = 0; i < 64; i++) tensor[(106 + p) * 64 + i] = 1.0;
-    }
-
-    // 110: 50-move counter (normalized by 99)
+    const wK = castling.includes('K') ? 1 : 0, wQ = castling.includes('Q') ? 1 : 0;
+    const bK = castling.includes('k') ? 1 : 0, bQ = castling.includes('q') ? 1 : 0;
+    const castleValues = isBlack ? [bK, bQ, wK, wQ] : [wK, wQ, bK, bQ];
+    for (let p = 0; p < 4; p++) if (castleValues[p]) for (let i = 0; i < 64; i++) tensor[(106 + p) * 64 + i] = 1.0;
     const halfNorm = Math.min(halfmove / 99, 1);
     for (let i = 0; i < 64; i++) tensor[110 * 64 + i] = halfNorm;
-
-    // 111: en passant available
     if (fenParts[3] && fenParts[3] !== '-') {
-      for (let i = 0; i < 64; i++) tensor[111 * 64 + i] = 1.0;
+      const epF = fenParts[3].charCodeAt(0) - 97, epR = parseInt(fenParts[3][1], 10) - 1;
+      const lEpR = isBlack ? (7 - epR) : epR, lEpF = isBlack ? (7 - epF) : epF;
+      tensor[111 * 64 + (7 - lEpR) * 8 + lEpF] = 1.0;
     }
+    return tensor;
+  }
 
+  function encodeMaia2(chess) {
+    const isBlack = chess.turn() === 'b';
+    const tensor = new Float32Array(18 * 64);
+    let boardToEncode = chess;
+    if (isBlack) {
+      boardToEncode = new Chess();
+      boardToEncode.load(mirrorFEN(chess.fen()));
+    }
+    const board = boardToEncode.board();
+    const pieceMap = { 'p': 0, 'n': 1, 'b': 2, 'r': 3, 'q': 4, 'k': 5 };
+
+    for (let r = 0; r < 8; r++) {
+      for (let f = 0; f < 8; f++) {
+        const cell = board[r][f];
+        if (!cell) continue;
+        const rank0 = 7 - r, file0 = f;
+        const tensorIdx = rank0 * 8 + file0;
+        const plane = (cell.color === 'w' ? 0 : 6) + pieceMap[cell.type];
+        tensor[plane * 64 + tensorIdx] = 1.0;
+      }
+    }
+    for (let i = 0; i < 64; i++) tensor[12 * 64 + i] = 1.0; // Active side always W after mirror
+    const fen = boardToEncode.fen().split(' ');
+    const castling = fen[2];
+    if (castling.includes('K')) for (let i = 0; i < 64; i++) tensor[13 * 64 + i] = 1.0;
+    if (castling.includes('Q')) for (let i = 0; i < 64; i++) tensor[14 * 64 + i] = 1.0;
+    if (castling.includes('k')) for (let i = 0; i < 64; i++) tensor[15 * 64 + i] = 1.0;
+    if (castling.includes('q')) for (let i = 0; i < 64; i++) tensor[16 * 64 + i] = 1.0;
+    const ep = fen[3];
+    if (ep && ep !== '-') {
+      const f_ep = ep.charCodeAt(0) - 97, r_ep = parseInt(ep[1]) - 1;
+      tensor[17 * 64 + r_ep * 8 + f_ep] = 1.0;
+    }
     return tensor;
   }
 
   // -------------------------------------------------------------------------
-  // Inference session
+  // 3. Main Interface
   // -------------------------------------------------------------------------
+
   let session = null;
-  let loadError = null;
+  let isMaia2 = false;
 
   async function loadModel(modelPath = './models/maia-1500.onnx') {
     try {
@@ -167,86 +242,87 @@ const MAIA = (() => {
         executionProviders: ['wasm'],
         graphOptimizationLevel: 'all',
       });
-      console.log('[Maia] Model loaded:', modelPath);
-      console.log('[Maia] Input names:', session.inputNames);
-      console.log('[Maia] Output names:', session.outputNames);
+      // Detect model type by input names/count
+      isMaia2 = session.inputNames.length > 1 || session.inputNames.includes('boards');
+      console.log(`[Maia] Loaded ${isMaia2 ? 'Maia 2 / Rapid' : 'Maia 1 (Leela)'} model.`);
       return true;
     } catch (err) {
-      loadError = err;
       console.error('[Maia] Failed to load model:', err);
       return false;
     }
   }
 
-  /**
-   * Get move probabilities from Maia for the current position.
-   * Returns array of {move (verbose chess.js obj), uci, prob} sorted desc by prob.
-   * Only includes legal moves.
-   */
-  async function getMaiaProbs(chess) {
-    if (!session) {
-      throw new Error(loadError
-        ? `Maia model failed to load: ${loadError.message}`
-        : 'Maia model not loaded yet. Call loadModel() first.');
-    }
+  async function getMaiaProbs(chess, eloSelf = 1500, eloOppo = 1500) {
+    if (!session) throw new Error('Maia model not loaded.');
 
     const isBlack = chess.turn() === 'b';
-    const inputData = encodeBoard(chess);
-    const inputTensor = new ort.Tensor('float32', inputData, [1, 112, 8, 8]);
+    let outputMap;
 
-    // Auto-detect the model's actual input name (varies by conversion tool)
-    const inputName = session.inputNames[0];
-    const outputMap = await session.run({ [inputName]: inputTensor });
+    if (isMaia2) {
+      const inputData = encodeMaia2(chess);
+      const catSelf = mapEloToCategory(eloSelf);
+      const catOppo = mapEloToCategory(eloOppo);
+      outputMap = await session.run({
+        'boards': new ort.Tensor('float32', inputData, [1, 18, 8, 8]),
+        'elo_self': new ort.Tensor('int64', BigInt64Array.from([BigInt(catSelf)]), [1]),
+        'elo_oppo': new ort.Tensor('int64', BigInt64Array.from([BigInt(catOppo)]), [1])
+      });
+    } else {
+      const inputData = encodeLeela(chess);
+      const inputTensor = new ort.Tensor('float32', inputData, [1, 112, 8, 8]);
+      outputMap = await session.run({ [session.inputNames[0]]: inputTensor });
+    }
 
-    // Get first output (policy logits)
-    const policyKey = Object.keys(outputMap)[0];
-    const logits = outputMap[policyKey].data; // Float32Array of length 1858
+    // Policy is usually the first output
+    const policyKey = session.outputNames[0];
+    const logits = outputMap[policyKey].data;
 
-    // Softmax
+    // Apply Softmax
     const maxLogit = Math.max(...logits);
     const exps = Array.from(logits).map(x => Math.exp(x - maxLogit));
     const sumExp = exps.reduce((a, b) => a + b, 0);
     const probs = exps.map(x => x / sumExp);
 
-    // Get all legal moves (verbose)
     const legalMoves = chess.moves({ verbose: true });
-
-    // Build a set of legal move UCI strings for fast lookup
     const legalUCISet = new Map();
-    for (const m of legalMoves) {
-      const uci = m.from + m.to + (m.promotion || '');
-      legalUCISet.set(uci, m);
-    }
+    legalMoves.forEach(m => legalUCISet.set(m.from + m.to + (m.promotion || ''), m));
 
-    // Map policy indices to legal moves
     const result = [];
-    for (let i = 0; i < 1858; i++) {
-      const entry = POLICY_TABLE[i];
-      const uci   = leelaMoveToUCI(entry, isBlack);
+    const policyTable = isMaia2 ? MAIA2_POLICY : LEELA_POLICY;
+
+    for (let i = 0; i < policyTable.length; i++) {
+      let uci;
+      if (isMaia2) {
+        uci = policyTable[i];
+        if (isBlack) uci = mirrorMove(uci);
+      } else {
+        const entry = policyTable[i];
+        const leelaSqToAlg = (sq, black) => {
+          const lr = Math.floor(sq / 8), lf = sq % 8;
+          const r = black ? (7 - lr) : lr, f = black ? (7 - lf) : lf;
+          return 'abcdefgh'[f] + (r + 1);
+        };
+        uci = leelaSqToAlg(entry.fromSq, isBlack) + leelaSqToAlg(entry.toSq, isBlack) + (entry.promo || '');
+      }
+
       if (legalUCISet.has(uci)) {
-        result.push({
-          move: legalUCISet.get(uci),
-          uci,
-          prob: probs[i],
-        });
+        result.push({ move: legalUCISet.get(uci), uci, prob: probs[i] });
       }
     }
 
-    // If some legal moves have zero policy coverage, assign tiny uniform prob
+    // Fallback for moves not in policy table (e.g. edge cases)
     if (result.length < legalMoves.length) {
       const covered = new Set(result.map(r => r.uci));
-      const eps = 1e-5;
-      for (const [uci, move] of legalUCISet.entries()) {
-        if (!covered.has(uci)) result.push({ move, uci, prob: eps });
+      for (const [uci, m] of legalUCISet.entries()) {
+        if (!covered.has(uci)) result.push({ move: m, uci, prob: 1e-5 });
       }
     }
 
-    // Sort descending by probability
     result.sort((a, b) => b.prob - a.prob);
     return result;
   }
 
-  return { loadModel, getMaiaProbs, encodeBoard, POLICY_TABLE };
+  return { loadModel, getMaiaProbs };
 })();
 
 window.MAIA = MAIA;

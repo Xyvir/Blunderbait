@@ -33,11 +33,11 @@
   modelStatus.textContent = 'Loading Maia model…';
   modelStatus.className = 'model-status loading';
 
-  await MAIA.loadModel('./models/maia-1500.onnx').then(async ok => {
+  await MAIA.loadModel('./models/maia_rapid.onnx').then(async ok => {
     modelLoaded = ok;
     const statusEl = document.getElementById('model-status');
     if (ok) {
-      statusEl.textContent = 'Maia 1500 ✓';
+      statusEl.textContent = 'Maia Rapid ✓';
       statusEl.className = 'model-status ok';
       if (queuedFen) {
         await triggerBBIPipeline(queuedFen, null);

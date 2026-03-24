@@ -27,16 +27,20 @@
   UI.updateStatus();
 
   // -------------------------------------------------------------------------
-  // Load Maia model
+  // Load Maia model & Explorer DB
   // -------------------------------------------------------------------------
   const modelStatus = document.getElementById('model-status');
-  modelStatus.textContent = 'Loading Maia model…';
+  modelStatus.textContent = 'Loading Engine & DB…';
   modelStatus.className = 'model-status loading';
 
+  // Load DB first (it's large, start it early)
+  const dbPromise = MAIA.loadExplorerDB('./models/explorer_db.json');
+  
   await MAIA.loadModel('./models/maia_rapid.onnx').then(async ok => {
     modelLoaded = ok;
     const statusEl = document.getElementById('model-status');
     if (ok) {
+      await dbPromise; // Ensure DB is also tried
       statusEl.textContent = 'Maia Rapid ✓';
       statusEl.className = 'model-status ok';
       if (queuedFen) {
@@ -47,9 +51,9 @@
         await triggerBBIPipeline(chess.fen(), null);
       }
     } else {
-      statusEl.textContent = 'Maia model not found — place maia-1500.onnx in ./models/';
+      statusEl.textContent = 'Maia model not found — place maia_rapid.onnx in ./models/';
       statusEl.className = 'model-status error';
-      UI.showToast('Maia model not found. Place maia-1500.onnx in ./models/ and reload.', 'error');
+      UI.showToast('Maia model not found. Place maia_rapid.onnx in ./models/ and reload.', 'error');
     }
 
     // Hide initial fullscreen loader once everything is ready

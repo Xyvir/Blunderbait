@@ -69,6 +69,26 @@ function computeSEE(chess, move) {
 }
 
 /**
+ * Identify the worst hanging piece for the CURRENT side to move (i.e. the opponent
+ * of the player who just acted).
+ * Returns the maximum material gain the current side can achieve via capture.
+ */
+function getHangingPenalty(chess) {
+  const opponentMoves = chess.moves({ verbose: true });
+  let maxGain = 0;
+
+  for (const m of opponentMoves) {
+    // We only care about captures to find "hanging" pieces
+    if (m.captured) {
+      const gain = computeSEE(chess, m);
+      if (gain > maxGain) maxGain = gain;
+    }
+  }
+
+  return maxGain;
+}
+
+/**
  * Filter Maia's move probability list by SEE threshold, then re-normalize.
  *
  * @param {Chess}  chess        - current chess.js state
@@ -79,8 +99,16 @@ function computeSEE(chess, move) {
 function filterByPlausibility(chess, moveProbPairs, threshold = -2.0) {
   const surviving = moveProbPairs
     .map(pair => {
-      const see = computeSEE(chess, pair.move);
-      return { ...pair, see };
+      // 1. Local SEE (is the target square safe?)
+      const moveSee = computeSEE(chess, pair.move);
+      
+      // 2. Global Hanging Detection (is something else now hanging?)
+      const copy = new Chess(chess.fen());
+      copy.move({ from: pair.move.from, to: pair.move.to, promotion: pair.move.promotion || 'q' });
+      const globalPenalty = getHangingPenalty(copy);
+      
+      const effectiveSee = moveSee - globalPenalty;
+      return { ...pair, see: effectiveSee };
     })
     .filter(pair => pair.see >= threshold);
 

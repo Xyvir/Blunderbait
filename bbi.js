@@ -239,17 +239,23 @@ async function runPipeline(chess, workerHelper, options = {}) {
 
   // --- Step 1: Get Maia probabilities ---
   let rawProbs;
+  let winProb = 0.5;
+  let source = 'Maia';
   try {
-    rawProbs = await MAIA.getMaiaProbs(chess);
+    const maiaRes = await MAIA.getMaiaProbs(chess);
+    rawProbs = maiaRes.moveProbs;
+    winProb = maiaRes.winProb;
+    source = maiaRes.source;
   } catch (err) {
     console.error('[BBI] Maia error:', err);
     // Fallback: uniform distribution over legal moves
     const moves = chess.moves({ verbose: true });
     const prob  = 1 / moves.length;
     rawProbs = moves.map(m => ({ move: m, uci: m.from + m.to + (m.promotion || ''), prob }));
+    source = 'Fallback (Uniform)';
   }
 
-  console.log(`[BBI] Maia returned ${rawProbs.length} moves`);
+  console.log(`[BBI] Sourced from ${source}: ${rawProbs.length} moves. WinProb: ${(winProb * 100).toFixed(1)}%`);
 
   // --- Step 2: SEE Plausibility Filter ---
   const plausible = SEE.filterByPlausibility(chess, rawProbs, seeThreshold);
@@ -353,7 +359,7 @@ async function runPipeline(chess, workerHelper, options = {}) {
     cpLoss:    Math.max(0, syncedObjectiveEval - e.evalPawns), // pawn units lost vs best play
   }));
 
-  const finalResult = { objectiveEval: syncedObjectiveEval, expectedEval, delta, grade, moveTable, fen, isForcedMate, scoreMate: objResult.score_mate, bestmove: objResult.bestmove };
+  const finalResult = { objectiveEval: syncedObjectiveEval, expectedEval, delta, grade, moveTable, fen, isForcedMate, scoreMate: objResult.score_mate, bestmove: objResult.bestmove, source };
   
   // Save to cache
   await BBICache.set(fen, finalResult);

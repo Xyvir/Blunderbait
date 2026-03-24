@@ -1,7 +1,4 @@
 *.py
-# Ignore models as they are large binary files
-models/*.onnx
-models/*.json
 # Ignore browser cache/other artifacts if any
 .DS_Store
 Thumbs.db

@@ -174,12 +174,14 @@ const UI = (() => {
     const tbody = document.getElementById('move-table-body');
     tbody.innerHTML = '';
 
-      const tr = document.createElement('tr');
-      if (row.isPruned) tr.classList.add('pruned-move');
+    moveTable.forEach((row, i) => {
       const pct = (row.prob * 100).toFixed(1);
 
       // Hide moves that round to 0.0% (too obscure for humans)
       if (pct === '0.0') return;
+
+      const tr = document.createElement('tr');
+      if (row.isPruned) tr.classList.add('pruned-move');
       
       const evalVal = row.evalPawns;
       const ev = (evalVal >= 0 ? '↑' : '↓') + Math.abs(evalVal).toFixed(2);

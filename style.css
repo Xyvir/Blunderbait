@@ -684,6 +684,16 @@ input:checked + .switch-slider:before {
 .eval-cell.neg { color: var(--accent-red); }
 .empty-row { text-align: center; color: var(--text-muted); padding: 24px; }
 
+/* Pruned move styling */
+.move-table tr.pruned-move {
+  opacity: 0.55;
+  filter: grayscale(0.8);
+  background: rgba(0, 0, 0, 0.05);
+}
+.move-table tr.pruned-move .move-san {
+  color: var(--text-muted);
+}
+
 /* Model status badge */
 .model-status {
   font-size: 0.75rem;

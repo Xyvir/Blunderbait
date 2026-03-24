@@ -262,13 +262,24 @@ async function runPipeline(chess, workerHelper, options = {}) {
   console.log(`[SEE] ${plausible.length} moves survived (threshold: ${seeThreshold})`);
 
   // --- Step 2.5: Human Probability Pruning ---
-  // Prune moves with <= 0.5% probability after initial re-normalization to clean up UI/Expected Eval
+  // Mark moves with <= 0.5% probability as pruned. They will be visible in the UI but excluded from BBI score calculations.
   const probThreshold = 0.005;
   const significant = plausible.filter(p => p.prob > probThreshold);
+  const totalSignificantProb = significant.reduce((sum, p) => sum + p.prob, 0);
+  
   if (significant.length > 0 && significant.length < plausible.length) {
-    console.log(`[BBI] Pruning ${plausible.length - significant.length} low-probability moves (<= 0.5%)`);
-    const totalProb = significant.reduce((sum, p) => sum + p.prob, 0);
-    plausible = significant.map(p => ({ ...p, prob: p.prob / totalProb }));
+    plausible = plausible.map(p => {
+      const isPruned = p.prob <= probThreshold;
+      return {
+        ...p,
+        isPruned,
+        // bbiProb is the re-normalized probability among non-pruned moves (used for expectedEval)
+        bbiProb: isPruned ? 0 : (p.prob / totalSignificantProb)
+      };
+    });
+  } else {
+    // Fallback: If ALL moves are low-prob, or if ALL moves are above threshold, don't prune anything.
+    plausible = plausible.map(p => ({ ...p, isPruned: false, bbiProb: p.prob }));
   }
 
   // --- Step 3 & 4 Progress tracking ---
@@ -314,6 +325,8 @@ async function runPipeline(chess, workerHelper, options = {}) {
         score_mate: res.score_mate,
         // After opponent's response position, we negate (it's opponent's turn next)
         evalPawns:  -cpToPawns(res.score_cp, res.score_mate, turn === 'w' ? 'b' : 'w'),
+        bbiProb:    pair.bbiProb,
+        isPruned:   pair.isPruned,
       };
     });
   });
@@ -328,7 +341,8 @@ async function runPipeline(chess, workerHelper, options = {}) {
   const syncedObjectiveEval = (Math.abs(bestMoveVal - objectiveEval) > 0.05) ? bestMoveVal : objectiveEval;
 
   // --- Step 5: Expected Evaluation ---
-  const expectedEval = evaluated.reduce((sum, e) => sum + e.prob * e.evalPawns, 0);
+  // Expected Eval only considers 'significant' moves (> 0.5% prob after first re-normalization)
+  const expectedEval = evaluated.reduce((sum, e) => sum + e.bbiProb * e.evalPawns, 0);
 
   // --- Step 6: BBI Delta ---
   const delta = syncedObjectiveEval - expectedEval;
@@ -365,8 +379,9 @@ async function runPipeline(chess, workerHelper, options = {}) {
     evalPawns: e.evalPawns,
     evalAbs:   isWhiteTurn ? e.evalPawns : -e.evalPawns, // White-relative for consistent dashboard display
     scoreMate: e.score_mate,
-    weighted:  e.prob * e.evalPawns,
+    weighted:  e.bbiProb * e.evalPawns,
     cpLoss:    Math.max(0, syncedObjectiveEval - e.evalPawns), // pawn units lost vs best play
+    isPruned:  e.isPruned,
   }));
 
   const finalResult = { objectiveEval: syncedObjectiveEval, expectedEval, delta, grade, moveTable, fen, isForcedMate, scoreMate: objResult.score_mate, bestmove: objResult.bestmove, source };

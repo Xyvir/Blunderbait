@@ -1,1 +1,1 @@
-Demo here: https://xyvir.github.io/Bluderbait/
+Demo here: https://xyvir.github.io/Blunderbait/

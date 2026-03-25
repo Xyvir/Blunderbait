@@ -149,17 +149,15 @@
       const pgnHeader = tempChess.header();
       const startFen = pgnHeader.FEN || 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
       
-      chess.load(startFen);
-      board.position(startFen);
-      UI.updateStatus();
+      UI.showToast(`Hydrating ${history.length} moves...`, 'info');
+
+      // UI.loadFEN updates visual board, global chess state, and triggers initial evaluation
+      const ok = UI.loadFEN(startFen);
+      if (!ok) throw new Error("Failed to load starting FEN");
 
       // Use a fresh chess instance to step through
       const walkChess = new Chess(startFen);
       
-      UI.showToast(`Hydrating ${history.length} moves...`, 'info');
-
-      // 1. Evaluate starting position
-      await triggerBBIPipeline(startFen, null);
       progFill.style.width = `${(1 / (history.length + 1)) * 100}%`;
       progText.textContent = `1 / ${history.length + 1}`;
 

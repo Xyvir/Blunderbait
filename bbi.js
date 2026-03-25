@@ -177,43 +177,61 @@ class WorkerHelper {
     this.active.start(this.sf);
   }
 
-  _enqueue(fen, move, depth) {
+  _enqueue(fen, move, depth, priority = false) {
     return new Promise((resolve) => {
       const job = {
         resolve, score_cp: null, score_mate: null, pv: '', bestmove: null,
         start(sf) {
           if (move) {
-            console.log(`[Stockfish] Evaluating move: ${move} at depth ${depth}`);
+            console.log(`[Stockfish] ${priority ? '[PRIORITY] ' : ''}Evaluating move: ${move} at depth ${depth}`);
             sf.postMessage(`position fen ${fen} moves ${move}`);
           } else {
-            console.log(`[Stockfish] Evaluating root position at depth ${depth}`);
+            console.log(`[Stockfish] ${priority ? '[PRIORITY] ' : ''}Evaluating root position at depth ${depth}`);
             sf.postMessage(`position fen ${fen}`);
           }
           sf.postMessage(`go depth ${depth}`);
         },
       };
-      this.pending.push(job);
+      
+      if (priority) {
+        this.pending.unshift(job);
+      } else {
+        this.pending.push(job);
+      }
       this._runNext();
     });
   }
 
-  eval(fen, depth = 12)            { return this._enqueue(fen, null,  depth); }
-  evalMove(fen, move, depth = 12)  { return this._enqueue(fen, move,  depth); }
+  eval(fen, depth = 12, priority = false)            { return this._enqueue(fen, null,  depth, priority); }
+  evalMove(fen, move, depth = 12, priority = false)  { return this._enqueue(fen, move,  depth, priority); }
 
-  clear() {
-    if (this.active) this.active.resolve(null);
-    for (const job of this.pending) job.resolve(null);
-    this.pending = [];
-    this.active = null;
-    
-    // Send stop AND isready to flush the engine state
+  interruptActive() {
+    if (this.active) {
+      console.log('[Stockfish] Interrupting active task...');
+      this.active.resolve(null);
+      this.active = null;
+    }
     this.ready = false; 
     if (this.sf) {
       this.sf.postMessage('stop');
       this.sf.postMessage('isready');
-      console.log('[Stockfish] Interruption sent. Awaiting readyok...');
     }
   }
+
+  clearQueue() {
+    if (this.active) this.active.resolve(null);
+    for (const job of this.pending) job.resolve(null);
+    this.pending = [];
+    this.active = null;
+    this.ready = false; 
+    if (this.sf) {
+        this.sf.postMessage('stop');
+        this.sf.postMessage('isready');
+    }
+  }
+
+  // Deprecated: Alias for legacy code
+  clear() { this.clearQueue(); }
 }
 
 
@@ -226,6 +244,7 @@ async function runPipeline(chess, workerHelper, options = {}) {
     depth        = 12,
     maxMoves     = 20,   // cap plausible moves to evaluate for speed
     onProgress   = null, // callback for progress bar
+    priority     = false,
   } = options;
 
   const fen      = chess.fen();
@@ -375,7 +394,7 @@ async function runPipeline(chess, workerHelper, options = {}) {
   };
 
   // --- Step 3: Objective Evaluation of current position ---
-  const objResult = await workerHelper.eval(fen, depth);
+  const objResult = await workerHelper.eval(fen, depth, priority);
   if (!objResult) throw new Error('Interrupted');
 
   tickProgress();
@@ -399,7 +418,7 @@ async function runPipeline(chess, workerHelper, options = {}) {
       });
     }
 
-    return workerHelper.evalMove(fen, pair.uci, depth).then(res => {
+    return workerHelper.evalMove(fen, pair.uci, depth, priority).then(res => {
       if (!res) throw new Error('Interrupted');
       tickProgress();
       return {

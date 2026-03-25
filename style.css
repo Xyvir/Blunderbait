@@ -310,10 +310,31 @@ html, body {
 }
 
 .pgn-progress-text {
-  font-size: 0.7rem;
-  color: #8b949e;
-  text-align: right;
-  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  text-align: center;
+  margin-top: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.btn-stop-import {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 0.9rem;
+    padding: 0 4px;
+    margin-left: 8px;
+    transition: color 0.15s;
+    line-height: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.btn-stop-import:hover {
+    color: var(--accent-red);
 }
 
 .fen-row {

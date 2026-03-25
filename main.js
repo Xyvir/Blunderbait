@@ -24,7 +24,13 @@
   // -------------------------------------------------------------------------
   // Initialize chessboard UI
   // -------------------------------------------------------------------------
-  UI.init(chess, triggerBBIPipeline);
+  UI.init(chess, async (fen, move) => {
+    try {
+      await triggerBBIPipeline(fen, move);
+    } catch (e) {
+      if (e.message !== 'Interrupted') console.error('UI Pipeline error:', e);
+    }
+  });
   UI.updateStatus();
 
   // -------------------------------------------------------------------------
@@ -132,7 +138,6 @@
       return;
     }
 
-    isImporting = true;
     const history = tempChess.history({ verbose: true });
     
     // UI Progress Setup
@@ -142,24 +147,36 @@
     
     progContainer.classList.remove('hidden');
     progFill.style.width = '0%';
-    progText.textContent = `0 / ${history.length + 1}`;
+    const progSpan = progText.querySelector('span');
+    progSpan.textContent = `0 / ${history.length + 1}`;
 
     try {
       // Reset board to the PGN's starting position
-      const pgnHeader = tempChess.header();
-      const startFen = pgnHeader.FEN || 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
-      
-      UI.showToast(`Hydrating ${history.length} moves...`, 'info');
+    const pgnHeader = tempChess.header();
+    const startFen = pgnHeader.FEN || 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
+    
+    UI.showToast(`Hydrating ${history.length} moves...`, 'info');
 
-      // UI.loadFEN updates visual board, global chess state, and triggers initial evaluation
-      const ok = UI.loadFEN(startFen);
-      if (!ok) throw new Error("Failed to load starting FEN");
+    // UI.loadFEN updates visual board and global chess state.
+    // We load it silently so it doesn't trigger its own non-silent pipeline which would abort our import.
+    const ok = UI.loadFEN(startFen, true); 
+    if (!ok) throw new Error("Failed to load starting FEN");
+
+    // CRITICAL: Update currentFen so that the first move's retroactive evaluation 
+    // correctly targets the starting position.
+    currentFen = startFen; 
+    isImporting = true;
+
+    // Hydrate the initial starting position so its cache entry exists for the loop.
+    await triggerBBIPipeline(startFen, null);
 
       // Use a fresh chess instance to step through
       const walkChess = new Chess(startFen);
       
       progFill.style.width = `${(1 / (history.length + 1)) * 100}%`;
-      progText.textContent = `1 / ${history.length + 1}`;
+      progSpan.textContent = `1 / ${history.length + 1}`;
+
+      let loopPrevFen = startFen;
 
       // 2. Loop through moves
       for (let i = 0; i < history.length; i++) {
@@ -168,20 +185,48 @@
           const move = history[i];
           walkChess.move(move);
           
-          // Hydrate silently
-          await triggerBBIPipeline(walkChess.fen(), move, true, 9);
+          // Hydrate silently with sub-move progress using CURRENT slider depth
+          const targetDepth = parseInt(document.getElementById('depth-slider').value, 10);
           
-          // Update progress
-          const currentCount = i + 2;
-          const pct = (currentCount / (history.length + 1)) * 100;
-          progFill.style.width = `${pct}%`;
-          progText.textContent = `${currentCount} / ${history.length + 1}`;
+          let retries = 3; 
+          while (retries > 0 && isImporting) {
+            try {
+              await triggerBBIPipeline(walkChess.fen(), move, true, targetDepth, (pct) => {
+                  const currentCount = i + 2;
+                  const totalCount = history.length + 1;
+                  const subPct = Math.floor(pct * 99).toString().padStart(2, '0');
+                  progSpan.textContent = `${currentCount}.${subPct} / ${totalCount}`;
+                  
+                  // Smooth out the main bar: current base + sub-progress
+                  const totalPct = ((i + 1 + pct) / totalCount) * 100;
+                  progFill.style.width = `${totalPct}%`;
+              }, loopPrevFen);
+              break; // Success
+            } catch (e) {
+              // If interrupted by a foreground move, wait and retry this position
+              if (e.message === 'Interrupted' && isImporting) {
+                retries--;
+                await new Promise(r => setTimeout(r, 1000)); // Wait for the user's move to finish
+                continue;
+              }
+              throw e; 
+            }
+          }
+          
+          loopPrevFen = walkChess.fen();
+          
+          // final tick for this move
+          progSpan.textContent = `${i + 2}.00 / ${history.length + 1}`;
+          progFill.style.width = `${((i + 2) / (history.length + 1)) * 100}%`;
 
-          // Give the browser a moment to breathe/render
-          await new Promise(r => setTimeout(r, 20));
+          // Give the browser a moment to breathe/render/commit transactions
+          await new Promise(r => setTimeout(r, 60));
       }
 
       UI.showToast('Game Review ready!', 'success');
+      
+      // Refresh the UI for the starting position to show hydrated grades/badges
+      await triggerBBIPipeline(chess.fen(), null);
     } catch (err) {
       console.error('[PGN Import] Crashed:', err);
       UI.showToast('Import interrupted by an error.', 'error');
@@ -192,27 +237,40 @@
   }
 
   document.getElementById('btn-import-pgn').addEventListener('click', importPGN);
+  document.getElementById('btn-stop-import').addEventListener('click', () => {
+    isImporting = false;
+    UI.showToast('Import cancelled.', 'warning');
+  });
 
   // -------------------------------------------------------------------------
   // Pipeline orchestration
   // -------------------------------------------------------------------------
   // (pipelineRunning and queuedFen declared at top of IIFE)
 
-  async function triggerBBIPipeline(fen, executedMove, silent = false, depthOverride = null) {
+  async function triggerBBIPipeline(fen, executedMove, silent = false, depthOverride = null, onHydrateProgress = null, prevFenOverride = null) {
     const pipelineId = ++currentPipelineId;
-    workerHelper.clear(); // Interrupt Stockfish
+    
+    // Only interrupt the engine for foreground UI actions.
+    // Background hydration (silent) should just add to the queue.
+    // Only interrupt the *active* task for foreground UI actions.
+    // This allows background hydration tasks to stay in the queue.
+    if (!silent) workerHelper.interruptActive(); 
 
     if (!silent) {
-      isImporting = false; // Abort any active PGN hydration on manual move
+      // Manual move/evaluation
       UI.clearBestMoveArrow(); 
       UI.clearScorePanel();    
       UI.clearBlunderOverlay();
     }
 
-    const prevFen = currentFen;
-    currentFen = fen || chess.fen();
-
-    if (!silent) document.getElementById('fen-input').value = currentFen;
+    const prevFen = prevFenOverride || currentFen;
+    const targetFen = fen || chess.fen();
+    
+    if (!silent) {
+        currentFen = targetFen;
+        document.getElementById('fen-input').value = currentFen;
+    }
+    
     if (!modelLoaded) return;
 
     pipelineRunning = true;
@@ -223,29 +281,47 @@
       const seeThreshold = parseFloat(document.getElementById('see-slider').value);
 
       // Clone the board to isolate this pipeline run from future UI mutations (e.g. Undo, Next Move)
-      const pipelineChess = new Chess(currentFen);
+      const pipelineChess = new Chess(targetFen);
 
       const result = await BBI.runPipeline(pipelineChess, workerHelper, {
         seeThreshold, depth,
+        priority: !silent,
         onProgress: (pct) => {
           if (!silent && currentPipelineId === pipelineId) UI.updateProgress(pct);
+          if (onHydrateProgress) onHydrateProgress(pct);
         }
       });
 
-      if (currentPipelineId !== pipelineId) return;
+      // If it's a foreground UI update, abort if a NEW pipeline run has started in the meantime.
+      // We explicitly skip this check for silent background tasks so they can finish their cache work.
+      if (!silent && currentPipelineId !== pipelineId) return;
 
       // Retroactively add this position's grade to the previous move's cache!
       if (executedMove && prevFen) {
         const dScale = parseInt(document.getElementById('depth-slider').value, 10);
         const sScale = parseFloat(document.getElementById('see-slider').value);
         const prevKey = BBI.getCacheKey(prevFen, dScale, sScale);
-        const prevCache = await BBI.Cache.get(prevKey);
+        let prevCache = await BBI.Cache.get(prevKey);
         
+        if (!prevCache) {
+          // Create basic shell entry so navigation metadata is preserved 
+          // even if the position wasn't fully hydrated yet.
+          prevCache = {
+            fen: prevFen,
+            moveTable: [],
+            grade: '-',
+            depth: dScale,
+            timestamp: Date.now()
+          };
+        }
+
         if (prevCache) {
           const uci = executedMove.from + executedMove.to + (executedMove.promotion || '');
           
-          // 1. Track navigation
-          prevCache.lastNavigatedUci = uci;
+          // 1. Track navigation (Safety: Do not let manual moves overwrite the PGN path during import)
+          if (silent || !isImporting) {
+            prevCache.lastNavigatedUci = uci;
+          }
 
           // 2. Retroactive grading
           let mMatch = prevCache.moveTable.find(m => m.uci === uci);
@@ -323,6 +399,7 @@
 
     } catch (e) {
       if (e.message !== 'Interrupted') console.error('Pipeline error:', e);
+      throw e; // RE-THROW so caller (e.g. PGN loop) can handle it (retry)
     } finally {
       if (currentPipelineId === pipelineId) {
         pipelineRunning = false;

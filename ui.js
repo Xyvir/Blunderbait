@@ -71,12 +71,12 @@ const UI = (() => {
     if (onMoveCallback) onMoveCallback(chess.fen(), null);
   }
 
-  function loadFEN(fen) {
+  function loadFEN(fen, silent = false) {
     const ok = chess.load(fen);
     if (!ok) { showToast('Invalid FEN — please check your input.', 'error'); return false; }
     board.position(fen);
     updateStatus();
-    if (onMoveCallback) onMoveCallback(fen, null);
+    if (!silent && onMoveCallback) onMoveCallback(fen, null);
     return true;
   }
 
@@ -509,9 +509,6 @@ const UI = (() => {
     let uci = null;
     if (cached && cached.lastNavigatedUci) {
       uci = cached.lastNavigatedUci;
-    } else if (cached && cached.moveTable && cached.moveTable.length > 0) {
-      // Default to the most probable move if no history exists
-      uci = cached.moveTable[0].uci;
     }
 
     if (uci) {

@@ -376,8 +376,9 @@ async function runPipeline(chess, workerHelper, options = {}) {
   }
 
   // --- Step 3 & 4 Progress tracking ---
-  let movesToEval = plausible.slice(0, maxMoves);
-  console.log(`[BBI] Pipeline: plausible moves=${plausible.length}, searching top=${movesToEval.length}`);
+  // Filter out pruned moves (SEA failures) from the evaluation pipeline
+  let movesToEval = plausible.filter(p => !p.isPruned).slice(0, maxMoves);
+  console.log(`[BBI] Pipeline: plausible moves=${plausible.length}, searching top=${movesToEval.length} (pruned: ${plausible.filter(p=>p.isPruned).length})`);
   
   // Ensure all hydration candidates are included in the evaluation
   plausible.filter(p => p.isHydrationCandidate).forEach(c => {
@@ -439,8 +440,9 @@ async function runPipeline(chess, workerHelper, options = {}) {
   });
 
   // Always re-normalize at this step so the analyzed subset sums to 100%
+  // This effectively removes pruned moves from the probability distribution
   const searchProbSum = rawEvaluated.reduce((sum, e) => sum + e.prob, 0);
-  let normalizedEvaluated = (searchProbSum > 0 && searchProbSum < 1.0) 
+  let normalizedEvaluated = (searchProbSum > 0) 
     ? rawEvaluated.map(e => ({ ...e, prob: e.prob / searchProbSum }))
     : rawEvaluated;
 

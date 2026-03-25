@@ -220,7 +220,7 @@
           progFill.style.width = `${((i + 2) / (history.length + 1)) * 100}%`;
 
           // Give the browser a moment to breathe/render/commit transactions
-          await new Promise(r => setTimeout(r, 60));
+          await new Promise(r => setTimeout(r, 5));
       }
 
       UI.showToast('Game Review ready!', 'success');
@@ -342,6 +342,14 @@
           mMatch.futureGrade = result.grade;
           
           await BBI.Cache.set(prevKey, prevCache);
+
+          // If the user is currently looking at the position we just hydrated, 
+          // refresh the board badges dynamically!
+          const currentViewKey = BBI.getCacheKey(currentFen, dScale, sScale);
+          if (silent && prevKey === currentViewKey) {
+            UI.renderBlunderOverlay(prevCache.moveTable, prevCache.objectiveEval || 0);
+            UI.updateMoveHeatmap(prevCache.moveTable, 'hybrid');
+          }
         }
       }
 

@@ -220,11 +220,11 @@
       } else if (result.grade === 'F') {
         const otherSide = chess.turn() === 'w' ? 'Black' : 'White';
         if (result.expectedEval >= 5.0) {
-          interpEl.innerHTML = `🎉 <strong>${side} will likely start or continue a crushing attack against ${otherSide}</strong>`;
+          interpEl.innerHTML = `🎉 <strong>${side} is starting or continuing a crushing attack</strong>`;
         } else if (result.expectedEval <= -5.0) {
           interpEl.innerHTML = `📉 <strong>${otherSide} is mounting a crushing attack against ${side}</strong>`;
         } else {
-          interpEl.innerHTML = `🎉 <strong>The position is decisive</strong>`;
+          interpEl.innerHTML = `🛡️ <strong>Stable — Human play is engine-aligned</strong>`;
         }
         interpEl.className = 'interp neutral';
       } else if (result.grade === '💀' || result.grade === '☠️') {

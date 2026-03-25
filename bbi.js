@@ -5,18 +5,21 @@
  * Returns: { objectiveEval, expectedEval, delta, grade, moveTable,fen }
  */
 
-function gradeFromDelta(delta, objectiveEval, isForcedMate) {
+function gradeFromDelta(delta, objectiveEval, isForcedMate, expectedEval) {
   // If the active player has a forced mate in their favor, they're winning!
   // This isn't a trap for them—it means the *opponent* played a suicidal blunder.
   if (isForcedMate && objectiveEval > 0) return 'F'; 
  
-  
   if (delta >= 9.0)  return 'S'; 
   if (delta >= 5.0)  return 'A'; 
   if (delta >= 3.0)  return 'B'; 
   if (delta >= 1.5)  return 'C'; 
-  if (delta >= 0.0)  return 'D'; 
-  return 'F';                    
+  
+  // D rank is now the default for anything < 1.5 delta (including negative)
+  // EXCEPT for crushing advantages which get F rank
+  if (expectedEval >= 5.0 || expectedEval <= -5.0) return 'F';
+  
+  return 'D';                    
 }
 
 // -------------------------------------------------------------------------
@@ -240,6 +243,7 @@ async function runPipeline(chess, workerHelper, options = {}) {
 
   // --- Step 1: Get Maia probabilities ---
   let rawProbs;
+  let dbMoves = [];
   let winProb = 0.5;
   let source = 'Maia';
   try {
@@ -247,6 +251,7 @@ async function runPipeline(chess, workerHelper, options = {}) {
     rawProbs = maiaRes.moveProbs;
     winProb = maiaRes.winProb;
     source = maiaRes.source;
+    dbMoves = maiaRes.dbMoves || [];
   } catch (err) {
     console.error('[BBI] Maia error:', err);
     // Fallback: uniform distribution over legal moves
@@ -325,6 +330,7 @@ async function runPipeline(chess, workerHelper, options = {}) {
 
   // --- Step 3 & 4 Progress tracking ---
   let movesToEval = plausible.slice(0, maxMoves);
+  console.log(`[BBI] Pipeline: plausible moves=${plausible.length}, searching top=${movesToEval.length}`);
   
   // Ensure all hydration candidates are included in the evaluation
   plausible.filter(p => p.isHydrationCandidate).forEach(c => {
@@ -380,22 +386,30 @@ async function runPipeline(chess, workerHelper, options = {}) {
     });
   });
 
-  const evaluated = await Promise.all(evalPromises);
-  console.log(`[BBI] Evaluated ${evaluated.length} moves with Stockfish`);
+  const rawEvaluated = (await Promise.all(evalPromises)).map((e, i) => {
+    const m = movesToEval[i];
+    return { ...m, ...e }; // Merge maia info with engine info
+  });
+
+  // Always re-normalize at this step so the analyzed subset sums to 100%
+  const searchProbSum = rawEvaluated.reduce((sum, e) => sum + e.prob, 0);
+  let normalizedEvaluated = (searchProbSum > 0 && searchProbSum < 1.0) 
+    ? rawEvaluated.map(e => ({ ...e, prob: e.prob / searchProbSum }))
+    : rawEvaluated;
 
   // --- Step 4.5: Re-sync Objective Evaluation ---
   // If individualized move searches found a better result than the root search, use that as the baseline.
   // This ensures the dashboard doesn't contradict the move list.
-  const bestMoveVal = evaluated.length > 0 ? evaluated.reduce((max, e) => (e.evalPawns > max ? e.evalPawns : max), -30.0) : objectiveEval;
+  const bestMoveVal = normalizedEvaluated.length > 0 ? normalizedEvaluated.reduce((max, e) => (e.evalPawns > max ? e.evalPawns : max), -30.0) : objectiveEval;
   const syncedObjectiveEval = (Math.abs(bestMoveVal - objectiveEval) > 0.05) ? bestMoveVal : objectiveEval;
 
   // --- Step 4.7: SEE Hydration Implementation ---
   // Compare high-SEE moves against Maia's preferred choice (original top probability move)
-  const maiaBestMove = evaluated.find(e => e.uci === maiaTopUCI);
+  const maiaBestMove = normalizedEvaluated.find(e => e.uci === maiaTopUCI);
   const maiaBestEval = maiaBestMove ? maiaBestMove.evalPawns : objectiveEval;
 
   let hydrationApplied = false;
-  let finalEvaluatedList = evaluated.map(e => {
+  let finalEvaluatedList = normalizedEvaluated.map(e => {
     if (e.isHydrationCandidate && e.evalPawns > (maiaBestEval + 0.1)) {
       // Use effectiveMaiaTopProb for a much stronger hydration effect
       const boost = (e.evalPawns - maiaBestEval) * effectiveMaiaTopProb;
@@ -409,10 +423,58 @@ async function runPipeline(chess, workerHelper, options = {}) {
   });
 
   if (hydrationApplied) {
+    console.log(`[BBI] SEE Hydration successfully applied.`);
+  }
+
+  // --- Step 4.8: Lumbra's Opening Book Hydration (Hybrid: Prune & Recalculate) ---
+  // If we are in Hybrid mode, the book move is pulled out of the model's distribution
+  // and its probability is recalculated based on its tactical score vs the alternatives.
+  if (source === 'Hybrid' && dbMoves.length > 0) {
+    // 1. Partition evaluated moves into book moves and alternatives
+    const bookMovesList = finalEvaluatedList.filter(e => dbMoves.includes(e.uci));
+    const alternatives = finalEvaluatedList.filter(e => !dbMoves.includes(e.uci));
+
+    if (bookMovesList.length > 0 && alternatives.length > 0) {
+      // 2. Re-normalize alternatives to sum to 1.0 (to find the true "alternative world")
+      const altSum = alternatives.reduce((sum, e) => sum + e.prob, 0);
+      const normalizedAlts = alternatives.map(e => ({ ...e, prob: e.prob / altSum }));
+      
+      // 3. Find the best alternative
+      const altTopMove = normalizedAlts.reduce((prev, curr) => (curr.prob > prev.prob ? curr : prev));
+      const altTopEval = altTopMove.evalPawns;
+      const altTopProb = altTopMove.prob;
+
+      // 4. Recalculate book move probabilities
+      const updatedBookMoves = bookMovesList.map(bm => {
+        const diff = bm.evalPawns - altTopEval;
+        let newProb = 0;
+        
+        if (diff > 0.1) {
+          // Dynamic Multiplier: (Material Diff) * Top Alternative Prob
+          newProb = diff * altTopProb;
+        } else {
+          // Baseline: Fallback to original model probability if not tactically better
+          newProb = bm.prob;
+        }
+
+        console.log(`[BBI] Recalculated Book Move ${bm.uci}: eval=${bm.evalPawns.toFixed(2)} vs altTop=${altTopEval.toFixed(2)}, newProb=${newProb.toFixed(4)}`);
+        return { ...bm, prob: newProb, isBookHydrated: true };
+      });
+
+      // 5. Re-merge and set as the new final list (normalization happens in Step 4.9)
+      finalEvaluatedList = normalizedAlts.concat(updatedBookMoves);
+      hydrationApplied = true;
+      console.log(`[BBI] Prune & Recalculate successfully applied for Hybrid mode.`);
+    }
+  }
+
+  // --- Step 4.9: Post-Hydration Finalization ---
+  if (hydrationApplied) {
     const totalProb = finalEvaluatedList.reduce((sum, e) => sum + e.prob, 0);
     finalEvaluatedList = finalEvaluatedList.map(e => ({ ...e, prob: e.prob / totalProb }));
     
-    // Re-calculate bbiProb/isPruned for expectedEval based on hydrated probabilities
+    // Re-calculate bbiProb/isPruned for expectedEval based on final hydrated probabilities
+    const probThreshold = 0.005; // 0.5%
     const sig = finalEvaluatedList.filter(e => e.prob > probThreshold);
     const totalSigProb = sig.reduce((sum, e) => sum + e.prob, 0);
     finalEvaluatedList = finalEvaluatedList.map(e => {
@@ -423,10 +485,10 @@ async function runPipeline(chess, workerHelper, options = {}) {
         bbiProb: isPruned ? 0 : (e.prob / totalSigProb)
       };
     });
-    console.log(`[BBI] SEE Hydration successfully applied.`);
   }
 
   const finalEvaluated = finalEvaluatedList;
+  console.log(`[BBI] Pipeline: finalEvaluated size=${finalEvaluated.length}`);
 
   // --- Step 5: Expected Evaluation ---
   // Expected Eval only considers 'significant' moves (> 0.5% prob after hydration/re-normalization)
@@ -434,6 +496,7 @@ async function runPipeline(chess, workerHelper, options = {}) {
 
   // --- Step 6: BBI Delta ---
   const delta = syncedObjectiveEval - expectedEval;
+  console.log(`[BBI] Pipeline: delta=${delta.toFixed(3)} (Engine=${syncedObjectiveEval.toFixed(3)} - Human=${expectedEval.toFixed(3)})`);
 
   // --- Step 7: Grade ---
   // Check if humans have >= 1% chance of blundering into a forced mate (eval drops to -30)
@@ -444,13 +507,10 @@ async function runPipeline(chess, workerHelper, options = {}) {
   const topHumanMove = finalEvaluated.length > 0 ? finalEvaluated.reduce((prev, curr) => (curr.prob > prev.prob ? curr : prev)) : null;
   const topHumanEval = topHumanMove ? topHumanMove.evalPawns : objectiveEval;
 
-  let grade = isLethalTrap ? 'SS' : gradeFromDelta(delta, objectiveEval, isForcedMate);
+  let grade = isLethalTrap ? 'SS' : gradeFromDelta(delta, objectiveEval, isForcedMate, expectedEval);
   
-  // Extension: F-rank also covers cases where the outcome is already a crushing lead (+5 margin)
-  // regardless of how much was "lost" compared to the engine best.
-  if (expectedEval >= 5.0 || expectedEval <= -5.0) {
-    grade = 'F';
-  }
+  // Crushing lead logic is already handled by gradeFromDelta
+  console.log(`[BBI] Pipeline: Assigned Grade=${grade}`);
   
   // Forced move edge case: If there's only one literal legal move, the human cannot blunder.
   // We award an S rank because the correct move is "found" by default.

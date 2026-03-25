@@ -326,18 +326,17 @@ const MAIA = (() => {
             console.log(`[Maia] Multi-move position in Lumbra's Opening Book. Sourcing ${dbMoveProbs.length} moves.`);
             return { moveProbs: dbMoveProbs, winProb: 0.5, source: "Lumbra's Opening Book" };
           } else if (dbMoveProbs.length === 1) {
-            console.log(`[Maia] Single-move position in Lumbra's Opening Book. Merging with Maia model for alternates.`);
+            console.log(`[Maia] Hybrid mode detected. Book move: ${dbMoveProbs[0].move.san}. Passing to BBI for dynamic weighting.`);
             const maiaRes = await getModelProbs(chess, eloSelf, eloOppo);
             const dbMove = dbMoveProbs[0];
             
-            // Re-normalize model probs to sum to 0.1, DB move gets 0.9
-            const modelMoveProbs = maiaRes.moveProbs.map(m => ({
-              ...m,
-              prob: m.uci === dbMove.uci ? (0.9 + m.prob * 0.1) : (m.prob * 0.1)
-            }));
-            
-            modelMoveProbs.sort((a, b) => b.prob - a.prob);
-            return { moveProbs: modelMoveProbs, winProb: maiaRes.winProb, source: 'Hybrid' };
+            // We return raw model probabilities but flag the DB move for bbi.js to boost later
+            return { 
+              moveProbs: maiaRes.moveProbs, 
+              winProb: maiaRes.winProb, 
+              source: 'Hybrid',
+              dbMoves: [dbMove.uci] 
+            };
           }
         }
       }

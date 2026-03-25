@@ -119,6 +119,9 @@
   async function triggerBBIPipeline(fen, executedMove) {
     const pipelineId = ++currentPipelineId;
     workerHelper.clear(); // Interrupt Stockfish
+    UI.clearBestMoveArrow(); // Clear old arrow immediately
+    UI.clearScorePanel();    // Clear old scores to avoid confusion
+    UI.clearBlunderOverlay(); // Clear old ghosts
 
     const prevFen = currentFen;
     currentFen = fen || chess.fen();
@@ -149,7 +152,10 @@
 
       // Retroactively add this position's grade to the previous move's cache!
       if (executedMove && prevFen) {
-        const prevCache = await BBI.Cache.get(prevFen);
+        const dScale = parseInt(document.getElementById('depth-slider').value, 10);
+        const sScale = parseFloat(document.getElementById('see-slider').value);
+        const prevKey = BBI.getCacheKey(prevFen, dScale, sScale);
+        const prevCache = await BBI.Cache.get(prevKey);
         if (prevCache) {
           const uci = executedMove.from + executedMove.to + (executedMove.promotion || '');
           let mMatch = prevCache.moveTable.find(m => m.uci === uci);
@@ -172,7 +178,7 @@
           }
 
           mMatch.futureGrade = result.grade;
-          await BBI.Cache.set(prevFen, prevCache);
+          await BBI.Cache.set(prevKey, prevCache);
         }
       }
 
@@ -189,7 +195,11 @@
         interpEl.innerHTML = `☠️ <strong>${side} is facing a lethal trap!</strong>`;
         interpEl.className = 'interp high';
       } else if (result.grade === 'S') {
-        interpEl.innerHTML = `🔥 <strong>${side} is in severe danger</strong>`;
+        if (result.moveTable.length === 1) {
+          interpEl.innerHTML = `🎯 <strong>${side} has a forced move — no alternative options</strong>`;
+        } else {
+          interpEl.innerHTML = `🔥 <strong>${side} is in severe danger</strong>`;
+        }
         interpEl.className = 'interp high';
       } else if (result.grade === 'A') {
         interpEl.innerHTML = `⚠️ <strong>${side} is in a minefield</strong>`;
@@ -205,7 +215,13 @@
         interpEl.className = 'interp neutral';
       } else if (result.grade === 'F') {
         const otherSide = chess.turn() === 'w' ? 'Black' : 'White';
-        interpEl.innerHTML = `🎉 <strong>${side} will likely start or continue a crushing attack against ${otherSide}</strong>`;
+        if (result.expectedEval >= 5.0) {
+          interpEl.innerHTML = `🎉 <strong>${side} will likely start or continue a crushing attack against ${otherSide}</strong>`;
+        } else if (result.expectedEval <= -5.0) {
+          interpEl.innerHTML = `📉 <strong>${otherSide} is mounting a crushing attack against ${side}</strong>`;
+        } else {
+          interpEl.innerHTML = `🎉 <strong>The position is decisive</strong>`;
+        }
         interpEl.className = 'interp neutral';
       } else if (result.grade === '💀' || result.grade === '☠️') {
         interpEl.innerHTML = `💀 <strong>${side} has been checkmated</strong>`;

@@ -123,5 +123,16 @@ function filterByPlausibility(chess, moveProbPairs, threshold = -2.0) {
   return surviving.map(p => ({ ...p, prob: p.prob / total }));
 }
 
+/**
+ * Scan all legal moves for those with an SEE >= threshold.
+ * Returns an array of verbose move objects.
+ */
+function scanForHydration(chess, threshold = 2.5) {
+  return chess.moves({ verbose: true }).filter(m => {
+    if (!m.captured) return false;
+    return computeSEE(chess, m) >= threshold;
+  });
+}
+
 // Export for use as a plain script (no ES modules needed)
-window.SEE = { computeSEE, filterByPlausibility, PIECE_VALUES };
+window.SEE = { computeSEE, filterByPlausibility, scanForHydration, PIECE_VALUES };

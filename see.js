@@ -97,30 +97,20 @@ function getHangingPenalty(chess) {
  * @returns {Array}             - filtered & re-normalized [{move, prob, see}, ...]
  */
 function filterByPlausibility(chess, moveProbPairs, threshold = -2.0) {
-  const surviving = moveProbPairs
-    .map(pair => {
-      // 1. Local SEE (is the target square safe?)
-      const moveSee = computeSEE(chess, pair.move);
-      
-      // 2. Global Hanging Detection (is something else now hanging?)
-      const copy = new Chess(chess.fen());
-      copy.move({ from: pair.move.from, to: pair.move.to, promotion: pair.move.promotion || 'q' });
-      const globalPenalty = getHangingPenalty(copy);
-      
-      const effectiveSee = moveSee - globalPenalty;
-      return { ...pair, see: effectiveSee };
-    })
-    .filter(pair => pair.see >= threshold);
+  return moveProbPairs.map(pair => {
+    // 1. Local SEE (is the target square safe?)
+    const moveSee = computeSEE(chess, pair.move);
 
-  if (surviving.length === 0) {
-    // Fallback: return all if everything was filtered (shouldn't happen in practice)
-    console.warn('[SEE] All moves pruned — returning unfiltered list');
-    return moveProbPairs.map(p => ({ ...p, see: 0 }));
-  }
+    // 2. Global Hanging Detection (is something else now hanging?)
+    const copy = new Chess(chess.fen());
+    copy.move({ from: pair.move.from, to: pair.move.to, promotion: pair.move.promotion || 'q' });
+    const globalPenalty = getHangingPenalty(copy);
 
-  // Re-normalize probabilities
-  const total = surviving.reduce((s, p) => s + p.prob, 0);
-  return surviving.map(p => ({ ...p, prob: p.prob / total }));
+    const effectiveSee = moveSee - globalPenalty;
+    const isPlausible = effectiveSee >= threshold;
+    
+    return { ...pair, see: effectiveSee, isPlausible };
+  });
 }
 
 /**

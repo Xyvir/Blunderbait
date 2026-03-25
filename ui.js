@@ -170,7 +170,13 @@ const UI = (() => {
   // -------------------------------------------------------------------------
   // Move heatmap
   // -------------------------------------------------------------------------
-  function updateMoveHeatmap(moveTable) {
+  function updateMoveHeatmap(moveTable, source) {
+    const indicator = document.getElementById('source-indicator');
+    if (indicator) {
+      indicator.textContent = source || 'Maia Rapid';
+      indicator.className = 'source-indicator source-' + (source || 'Maia').split(' ')[0].toLowerCase();
+    }
+
     const tbody = document.getElementById('move-table-body');
     tbody.innerHTML = '';
 

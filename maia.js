@@ -282,12 +282,10 @@ const MAIA = (() => {
       return false;
     }
   }
-
   async function getMaiaProbs(chess, eloSelf = 1500, eloOppo = 1500) {
     if (!session) throw new Error('Maia model not loaded.');
 
     const isBlack = chess.turn() === 'b';
-    let outputMap;
 
     // 1. Try Explorer DB (Opening Book)
     if (dbLoaded && explorerDB) {
@@ -311,7 +309,7 @@ const MAIA = (() => {
         const totalCount = moves.reduce((sum, m) => sum + (dbEntry[m].count || 0), 0);
         
         if (totalCount > 0) {
-          const moveProbs = [];
+          const dbMoveProbs = [];
           const tempChess = new Chess(chess.fen());
           
           for (const san of moves) {
@@ -319,26 +317,45 @@ const MAIA = (() => {
             if (m) {
               const uci = m.from + m.to + (m.promotion || '');
               const prob = (dbEntry[san].count || 0) / totalCount;
-              moveProbs.push({ move: m, uci, prob });
+              dbMoveProbs.push({ move: m, uci, prob });
               tempChess.undo();
             }
           }
           
-          if (moveProbs.length > 0) {
-            moveProbs.sort((a, b) => b.prob - a.prob);
-            console.log(`[Maia] Position found in Explorer DB. Sourcing ${moveProbs.length} moves.`);
-            return { moveProbs, winProb: 0.5, source: 'Explorer DB' }; // Value not in DB, default 0.5
+          if (dbMoveProbs.length > 1) {
+            dbMoveProbs.sort((a, b) => b.prob - a.prob);
+            console.log(`[Maia] Multi-move position in Explorer DB. Sourcing ${dbMoveProbs.length} moves.`);
+            return { moveProbs: dbMoveProbs, winProb: 0.5, source: 'Explorer DB' };
+          } else if (dbMoveProbs.length === 1) {
+            console.log(`[Maia] Single-move position in Explorer DB. Merging with Maia model for alternates.`);
+            const maiaRes = await getModelProbs(chess, eloSelf, eloOppo);
+            const dbMove = dbMoveProbs[0];
+            
+            // Re-normalize model probs to sum to 0.1, DB move gets 0.9
+            const modelMoveProbs = maiaRes.moveProbs.map(m => ({
+              ...m,
+              prob: m.uci === dbMove.uci ? (0.9 + m.prob * 0.1) : (m.prob * 0.1)
+            }));
+            
+            modelMoveProbs.sort((a, b) => b.prob - a.prob);
+            return { moveProbs: modelMoveProbs, winProb: maiaRes.winProb, source: 'Hybrid' };
           }
         }
       }
     }
+
+    return getModelProbs(chess, eloSelf, eloOppo);
+  }
+
+  async function getModelProbs(chess, eloSelf, eloOppo) {
+    const isBlack = chess.turn() === 'b';
+    let outputMap;
 
     if (isMaia2) {
       const inputData = encodeMaia2(chess);
       const catSelf = mapEloToCategory(eloSelf);
       const catOppo = mapEloToCategory(eloOppo);
       
-      // Use BigInt64Array for int64 inputs
       const selfTensor = new ort.Tensor('int64', BigInt64Array.from([BigInt(catSelf)]), [1]);
       const oppoTensor = new ort.Tensor('int64', BigInt64Array.from([BigInt(catOppo)]), [1]);
       const boardsTensor = new ort.Tensor('float32', inputData, [1, 18, 8, 8]);
@@ -353,6 +370,7 @@ const MAIA = (() => {
       const inputTensor = new ort.Tensor('float32', inputData, [1, 112, 8, 8]);
       outputMap = await session.run({ [session.inputNames[0]]: inputTensor });
     }
+
 
     // Policy is usually the first output (index 0)
     const policyKey = session.outputNames[0];

@@ -297,14 +297,15 @@ async function runPipeline(chess, workerHelper, options = {}) {
 
   console.log(`[SEE] ${plausible.length} moves survived (threshold: ${seeThreshold})`);
 
-  // --- Step 2.5: Human Probability Pruning ---
-  // Mark moves with <= 0.5% probability as pruned. They will be visible in the UI but excluded from BBI score calculations.
-  const significant = plausible.filter(p => p.prob > probThreshold);
+  // --- Step 2.5: Human Probability Pruning & SEE Integration ---
+  // Mark moves with <= 0.5% probability OR those that failed SEE as pruned.
+  // They will be visible in the UI but excluded from BBI score calculations.
+  const significant = plausible.filter(p => p.isPlausible && p.prob > probThreshold);
   const totalSignificantProb = significant.reduce((sum, p) => sum + p.prob, 0);
-  
-  if (significant.length > 0 && significant.length < plausible.length) {
+
+  if (significant.length > 0) {
     plausible = plausible.map(p => {
-      const isPruned = p.prob <= probThreshold;
+      const isPruned = !p.isPlausible || p.prob <= probThreshold;
       return {
         ...p,
         isPruned,
@@ -313,8 +314,13 @@ async function runPipeline(chess, workerHelper, options = {}) {
       };
     });
   } else {
-    // Fallback: If ALL moves are low-prob, or if ALL moves are above threshold, don't prune anything.
-    plausible = plausible.map(p => ({ ...p, isPruned: false, bbiProb: p.prob }));
+    // Fallback: If EVERYTHING is pruned, keep at least the top move to avoid NaN/div0
+    const top = plausible.sort((a, b) => b.prob - a.prob)[0];
+    plausible = plausible.map(p => ({
+      ...p,
+      isPruned: p !== top,
+      bbiProb: p === top ? 1.0 : 0
+    }));
   }
 
   // --- Step 3 & 4 Progress tracking ---
@@ -446,9 +452,10 @@ async function runPipeline(chess, workerHelper, options = {}) {
     grade = 'F';
   }
   
-  // Forced move edge case: If there's only one legal move, the human cannot blunder.
+  // Forced move edge case: If there's only one literal legal move, the human cannot blunder.
   // We award an S rank because the correct move is "found" by default.
-  if (finalEvaluated.length === 1) {
+  const legalMovesCount = chess.moves().length;
+  if (legalMovesCount === 1) {
     grade = 'S';
   }
 

@@ -183,7 +183,7 @@
       }
 
       UI.updateScorePanel(result);
-      UI.updateMoveHeatmap(result.moveTable);
+      UI.updateMoveHeatmap(result.moveTable, result.source);
       UI.renderBlunderOverlay(result.moveTable, result.objectiveEval);
       UI.renderBestMoveArrow(result.bestmove);
 
@@ -195,8 +195,12 @@
         interpEl.innerHTML = `☠️ <strong>${side} is facing a lethal trap!</strong>`;
         interpEl.className = 'interp high';
       } else if (result.grade === 'S') {
-        if (result.moveTable.length === 1) {
+        // Only call it a "forced move" if there are no other unpruned options
+        const unpruned = result.moveTable.filter(m => !m.isPruned);
+        if (unpruned.length === 1 && result.moveTable.length === 1) {
           interpEl.innerHTML = `🎯 <strong>${side} has a forced move — no alternative options</strong>`;
+        } else if (unpruned.length === 1) {
+          interpEl.innerHTML = `🎯 <strong>${side} has a strategic 'only move'</strong>`;
         } else {
           interpEl.innerHTML = `🔥 <strong>${side} is in severe danger</strong>`;
         }

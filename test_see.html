@@ -54,11 +54,11 @@
             console.log(`  - ${f.move.san} (SEE: ${f.see.toFixed(1)})`);
         });
 
-        const d6 = filtered.find(f => f.move.san === 'd6');
-        const qf5 = filtered.find(f => f.move.san === 'Qf5');
+        const d6 = filtered.find(f => f.move.san === 'd6' && f.isPlausible);
+        const qf5 = filtered.find(f => f.move.san === 'Qf5' && f.isPlausible);
 
         if (!d6 && qf5) {
-            console.log("\n✅ SUCCESS: 'd6' was pruned, but 'Qf5' survived.");
+            console.log("\n✅ SUCCESS: 'd6' is marked as NOT plausible, but 'Qf5' remains plausible.");
         } else {
             console.error("\n❌ FAILURE: Check pruning logic.");
         }

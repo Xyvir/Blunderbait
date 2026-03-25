@@ -174,7 +174,9 @@ const UI = (() => {
     const indicator = document.getElementById('source-indicator');
     if (indicator) {
       indicator.textContent = source || 'Maia Rapid';
-      indicator.className = 'source-indicator source-' + (source || 'Maia').split(' ')[0].toLowerCase();
+      let sourceKey = (source || 'Maia').split(' ')[0].toLowerCase();
+      if (sourceKey === "lumbra's") sourceKey = 'lumbra';
+      indicator.className = 'source-indicator source-' + sourceKey;
     }
 
     const tbody = document.getElementById('move-table-body');

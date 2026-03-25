@@ -322,10 +322,8 @@ const MAIA = (() => {
             }
           }
           
-          if (dbMoveProbs.length > 1) {
-            dbMoveProbs.sort((a, b) => b.prob - a.prob);
-            console.log(`[Maia] Multi-move position in Explorer DB. Sourcing ${dbMoveProbs.length} moves.`);
-            return { moveProbs: dbMoveProbs, winProb: 0.5, source: 'Explorer DB' };
+            console.log(`[Maia] Multi-move position in Lumbra's Opening Book. Sourcing ${dbMoveProbs.length} moves.`);
+            return { moveProbs: dbMoveProbs, winProb: 0.5, source: "Lumbra's Opening Book" };
           } else if (dbMoveProbs.length === 1) {
             console.log(`[Maia] Single-move position in Explorer DB. Merging with Maia model for alternates.`);
             const maiaRes = await getModelProbs(chess, eloSelf, eloOppo);

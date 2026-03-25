@@ -163,6 +163,10 @@ html, body {
   filter: sepia(0.4) hue-rotate(340deg) saturate(2);
   animation: blunder-pulse 2.2s ease-in-out infinite;
 }
+.blunder-piece.dim {
+  opacity: 0.15 !important;
+  filter: grayscale(1) contrast(0.5);
+}
 
 /* 1 piece - full size */
 .blunder-piece.count-1 {
@@ -223,6 +227,13 @@ html, body {
   text-shadow: none;
   letter-spacing: -0.02em;
   line-height: 1.3;
+}
+.blunder-badge.improving .blunder-cp {
+  background: rgba(57, 211, 83, 0.85);
+  color: #fff;
+}
+.blunder-badge.improving .blunder-emoji {
+  display: none !important;
 }
 
 /* chessboard.js overrides */
@@ -669,7 +680,7 @@ input:checked + .switch-slider:before {
 }
 .heatmap-title { font-weight: 600; }
 .heatmap-hint  { font-size: 0.72rem; color: var(--text-muted); }
-.heatmap-scroll { flex: 1; overflow-y: auto; max-height: 340px; }
+.heatmap-scroll { flex: 1; overflow-y: auto; }
 
 .move-table {
   width: 100%;

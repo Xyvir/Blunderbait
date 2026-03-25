@@ -129,11 +129,18 @@ class WorkerHelper {
   _handleLine(line) {
     if (!line || typeof line !== 'string') return;
 
-    if (line === 'readyok' && !this.ready) {
+    if (line === 'readyok') {
+      const wasReady = this.ready;
       this.ready = true;
+      if (!wasReady) console.log('[Stockfish] Engine synchronized and ready for new position.');
       this._runNext();
       return;
     }
+
+    // If we've called stop/isready, we ignore all incoming 'info' or 'bestmove'
+    // lines until we see 'readyok'. This prevents stale evaluations from 
+    // being incorrectly attributed to the new board state.
+    if (!this.ready) return;
 
     const job = this.active;
     if (!job) return;
@@ -167,11 +174,11 @@ class WorkerHelper {
       const job = {
         resolve, score_cp: null, score_mate: null, pv: '', bestmove: null,
         start(sf) {
-          // REMOVED: sf.postMessage('ucinewgame'); — calling ucinewgame before every search destroys the Transposition Table (Hash) 
-          // and causes massive instability in move evaluations at low depth.
           if (move) {
+            console.log(`[Stockfish] Evaluating move: ${move} at depth ${depth}`);
             sf.postMessage(`position fen ${fen} moves ${move}`);
           } else {
+            console.log(`[Stockfish] Evaluating root position at depth ${depth}`);
             sf.postMessage(`position fen ${fen}`);
           }
           sf.postMessage(`go depth ${depth}`);
@@ -190,7 +197,14 @@ class WorkerHelper {
     for (const job of this.pending) job.resolve(null);
     this.pending = [];
     this.active = null;
-    if (this.sf) this.sf.postMessage('stop');
+    
+    // Send stop AND isready to flush the engine state
+    this.ready = false; 
+    if (this.sf) {
+      this.sf.postMessage('stop');
+      this.sf.postMessage('isready');
+      console.log('[Stockfish] Interruption sent. Awaiting readyok...');
+    }
   }
 }
 
@@ -268,9 +282,12 @@ async function runPipeline(chess, workerHelper, options = {}) {
   const maiaTopProb = topProbPair ? topProbPair.prob : 0;
   const maiaTopUCI = topProbPair ? topProbPair.uci : null;
   console.log(`[BBI] Maia Top Move: ${maiaTopUCI} (${(maiaTopProb * 100).toFixed(1)}%)`);
+  
+  // NEW: Store original WIN probability to ensure syncedObjectiveEval is resilient
+  const originalWinProb = winProb;
 
   // --- Step 2: SEE Plausibility Filter ---
-  const probThreshold = 0.005; // Moved up to avoid ReferenceError
+  const probThreshold = 0.02; // Global threshold (2.0%)
   let plausible = SEE.filterByPlausibility(chess, rawProbs, seeThreshold);
   
   // --- Step 2.1: Identify Hydration Candidates (+2.5 SEE) ---
@@ -289,6 +306,7 @@ async function runPipeline(chess, workerHelper, options = {}) {
         uci, 
         prob, 
         see: SEE.computeSEE(chess, m), 
+        isPlausible: true, // Hydration candidates are by definition plausible
         isHydrationCandidate: true 
       });
     }
@@ -298,28 +316,30 @@ async function runPipeline(chess, workerHelper, options = {}) {
   // We use the top move from the 'significant' set if available
   const topSignificant = plausible.filter(p => p.prob > probThreshold).sort((a, b) => b.prob - a.prob)[0];
   const effectiveMaiaTopProb = topSignificant ? topSignificant.prob : maiaTopProb;
-  console.log(`[BBI] Effective Maia Top Prob for Hydration: ${(effectiveMaiaTopProb * 100).toFixed(1)}%`);
+  console.log(`[BBI] effectiveMaiaTopProb: ${(effectiveMaiaTopProb * 100).toFixed(1)}% (via ${topSignificant ? topSignificant.uci : 'fallback'})`);
+  console.log(`[BBI] maiaTopUCI: ${maiaTopUCI}, maiaTopProb: ${(maiaTopProb * 100).toFixed(1)}%`);
 
   console.log(`[SEE] ${plausible.length} moves survived (threshold: ${seeThreshold})`);
 
   // --- Step 2.5: Human Probability Pruning & SEE Integration ---
-  // Mark moves with <= 0.5% probability OR those that failed SEE as pruned.
-  // They will be visible in the UI but excluded from BBI score calculations.
-  const significant = plausible.filter(p => p.isPlausible && p.prob > probThreshold);
+  // Mark moves that failed SEE as pruned.
+  // Probability-based pruning is DELAYED until Step 4.9 to allow tactical hydration.
+  const significant = plausible.filter(p => p.isPlausible);
   const totalSignificantProb = significant.reduce((sum, p) => sum + p.prob, 0);
 
   if (significant.length > 0) {
     plausible = plausible.map(p => {
-      const isPruned = !p.isPlausible || p.prob <= probThreshold;
+      // FIX: Early pruning only happens for SEE failures (blunders)
+      const isPruned = !p.isPlausible; 
       return {
         ...p,
         isPruned,
         // bbiProb is the re-normalized probability among non-pruned moves (used for expectedEval)
-        bbiProb: isPruned ? 0 : (p.prob / totalSignificantProb)
+        bbiProb: isPruned ? 0 : (p.prob / (totalSignificantProb || 1))
       };
     });
   } else {
-    // Fallback: If EVERYTHING is pruned, keep at least the top move to avoid NaN/div0
+    // Fallback: If EVERYTHING failed SEE, keep at least the top move
     const top = plausible.sort((a, b) => b.prob - a.prob)[0];
     plausible = plausible.map(p => ({
       ...p,
@@ -402,6 +422,8 @@ async function runPipeline(chess, workerHelper, options = {}) {
   // This ensures the dashboard doesn't contradict the move list.
   const bestMoveVal = normalizedEvaluated.length > 0 ? normalizedEvaluated.reduce((max, e) => (e.evalPawns > max ? e.evalPawns : max), -30.0) : objectiveEval;
   const syncedObjectiveEval = (Math.abs(bestMoveVal - objectiveEval) > 0.05) ? bestMoveVal : objectiveEval;
+  
+  console.log(`[BBI] Objective Eval: ${objectiveEval.toFixed(2)}, Best Move Eval: ${bestMoveVal.toFixed(2)}, Synced: ${syncedObjectiveEval.toFixed(2)}`);
 
   // --- Step 4.7: SEE Hydration Implementation ---
   // Compare high-SEE moves against Maia's preferred choice (original top probability move)
@@ -423,7 +445,7 @@ async function runPipeline(chess, workerHelper, options = {}) {
   });
 
   if (hydrationApplied) {
-    console.log(`[BBI] SEE Hydration successfully applied.`);
+    console.log(`[BBI] SEE Hydration successfully applied to ${finalEvaluatedList.filter(e => e.isHydrated).length} moves.`);
   }
 
   // --- Step 4.8: Lumbra's Opening Book Hydration (Hybrid: Prune & Recalculate) ---
@@ -472,20 +494,21 @@ async function runPipeline(chess, workerHelper, options = {}) {
   if (hydrationApplied) {
     const totalProb = finalEvaluatedList.reduce((sum, e) => sum + e.prob, 0);
     finalEvaluatedList = finalEvaluatedList.map(e => ({ ...e, prob: e.prob / totalProb }));
-    
-    // Re-calculate bbiProb/isPruned for expectedEval based on final hydrated probabilities
-    const probThreshold = 0.005; // 0.5%
-    const sig = finalEvaluatedList.filter(e => e.prob > probThreshold);
-    const totalSigProb = sig.reduce((sum, e) => sum + e.prob, 0);
-    finalEvaluatedList = finalEvaluatedList.map(e => {
-      const isPruned = e.prob <= probThreshold;
-      return {
-        ...e,
-        isPruned,
-        bbiProb: isPruned ? 0 : (e.prob / totalSigProb)
-      };
-    });
   }
+
+  // Final pruning and bbiProb allocation (always runs)
+  const sig = finalEvaluatedList.filter(e => e.isPlausible && e.prob > probThreshold);
+  const totalSigProb = sig.reduce((sum, e) => sum + e.prob, 0);
+  
+  finalEvaluatedList = finalEvaluatedList.map(e => {
+    // A move is unpruned ONLY if it survived SEE AND has sufficient probability
+    const isPruned = !e.isPlausible || e.prob <= probThreshold;
+    return {
+      ...e,
+      isPruned,
+      bbiProb: isPruned ? 0 : (e.prob / (totalSigProb || 1))
+    };
+  });
 
   const finalEvaluated = finalEvaluatedList;
   console.log(`[BBI] Pipeline: finalEvaluated size=${finalEvaluated.length}`);
@@ -554,7 +577,7 @@ async function runPipeline(chess, workerHelper, options = {}) {
   return finalResult;
 }
 
-const BBI_REVISION = '2026-03-24-v3'; // Increment to invalidate old logic/grading caches
+const BBI_REVISION = '2026-03-24-v5'; // Increment to invalidate old logic/grading caches
 function getCacheKey(fen, depth, seeThreshold) {
   return `${fen}|d${depth}|s${seeThreshold}|${BBI_REVISION}`;
 }

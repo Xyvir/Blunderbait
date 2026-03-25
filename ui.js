@@ -114,7 +114,10 @@ const UI = (() => {
 
   function updateScorePanel({ objectiveEval, expectedEval, delta, grade, isForcedMate, scoreMate }) {
     const turn = chess.turn();
-    const fmtAdv = v => (v >= 0 ? '↑' : '↓') + Math.abs(v).toFixed(2);
+    const fmtAdv = v => {
+      if (Math.abs(v) < 0.001) return '=0.00';
+      return (v >= 0 ? '↑' : '↓') + Math.abs(v).toFixed(2);
+    };
     const fmtDelta = v => (v < 0 ? '-' : '') + Math.abs(v).toFixed(2);
 
     // Standard engine notation for Objective Eval: + for White, - for Black
@@ -144,7 +147,7 @@ const UI = (() => {
     // Expected Eval remains side-to-move relative (standard for "Human Outcome")
     const expEl = document.getElementById('exp-eval');
     expEl.textContent = fmtAdv(expectedEval);
-    expEl.className = 'metric-value ' + (expectedEval >= 0 ? 'eval-pos' : 'eval-neg');
+    expEl.className = 'metric-value ' + (expectedEval > 0 ? 'eval-pos' : 'eval-neg');
 
     document.getElementById('delta-eval').textContent = fmtDelta(delta);
 
@@ -192,7 +195,7 @@ const UI = (() => {
       if (row.isPruned) tr.classList.add('pruned-move');
       
       const evalVal = row.evalPawns;
-      const ev = (evalVal >= 0 ? '↑' : '↓') + Math.abs(evalVal).toFixed(2);
+      const ev = (Math.abs(evalVal) < 0.001) ? '=0.00' : (evalVal >= 0 ? '↑' : '↓') + Math.abs(evalVal).toFixed(2);
       
       const heat = probToHeat(row.prob);
       tr.innerHTML = `
@@ -202,8 +205,12 @@ const UI = (() => {
           <div class="prob-bar" style="width:${pct}%; background:${heat}"></div>
           <span class="prob-label">${pct}%</span>
         </td>
-        <td class="eval-cell ${evalVal >= 0 ? 'pos' : 'neg'}">${ev}</td>
+        <td class="eval-cell ${evalVal > 0 ? 'pos' : 'neg'}">${ev}</td>
       `;
+
+      tr.addEventListener('mouseenter', () => showSingleMoveGhost(row));
+      tr.addEventListener('mouseleave', () => hideSingleMoveGhost());
+
       tbody.appendChild(tr);
     });
   }
@@ -285,60 +292,114 @@ const UI = (() => {
     const isFlipped = document.getElementById('board').classList.contains('flipped');
 
     Object.entries(renderSq).forEach(([sq, data]) => {
-      // Find board coordinates for this square (e.g. "e4" -> file=4, rank=3)
-      const file = sq.charCodeAt(0) - 97; // a=0 … h=7
-      const rank = parseInt(sq[1]) - 1;   // 1=0 … 8=7
+      _renderSquareGhosts(container, sq, data, isFlipped);
+    });
+  }
 
-      const leftPct = isFlipped ? (7 - file) * 12.5 : file * 12.5;
-      const topPct = isFlipped ? rank * 12.5 : (7 - rank) * 12.5;
+  /**
+   * Private helper to render ghost pieces and badges on a specific square.
+   * Shared between the full blunder overlay and the single-move hover ghost.
+   */
+  function _renderSquareGhosts(container, sq, data, isFlipped) {
+    const file = sq.charCodeAt(0) - 97; // a=0 … h=7
+    const rank = parseInt(sq[1]) - 1;   // 1=0 … 8=7
 
-      const marker = document.createElement('div');
-      marker.className = 'blunder-marker';
-      if (data.blunders.length > 0) marker.classList.add('has-blunders');
-      if (data.grade) marker.classList.add('has-future-grade');
-      marker.style.cssText = `left:${leftPct}%; top:${topPct}%; width:12.5%; height:12.5%; position:absolute;`;
+    const leftPct = isFlipped ? (7 - file) * 12.5 : file * 12.5;
+    const topPct = isFlipped ? rank * 12.5 : (7 - rank) * 12.5;
 
-      if (data.blunders.length > 0) {
-        // Draw all ghost pieces (max 4 per square to prevent overflow)
-        const group = data.blunders.slice(0, 4);
-        group.forEach((m, idx) => {
-          const imgFile = (m.color === 'w' ? 'w' : 'b') + m.piece.toUpperCase();
-          const img = document.createElement('img');
-          img.src = `img/chesspieces/wikipedia/${imgFile}.png`;
-          img.className = `blunder-piece count-${group.length} idx-${idx}`;
-          marker.appendChild(img);
-        });
+    const marker = document.createElement('div');
+    marker.className = 'blunder-marker';
+    if (data.blunders.length > 0) marker.classList.add('has-blunders');
+    if (data.grade) marker.classList.add('has-future-grade');
+    marker.style.cssText = `left:${leftPct}%; top:${topPct}%; width:12.5%; height:12.5%; position:absolute;`;
 
-        // Explosion badge (bottom-center)
-        const badge = document.createElement('div');
-        badge.className = 'blunder-badge';
-
-        const avgEval = group.reduce((sum, m) => sum + m.evalPawns, 0) / group.length;
-        let evalTxt = (avgEval >= 0 ? '↑' : '↓') + Math.abs(avgEval).toFixed(1).replace(/\.0$/, '');
-
-        badge.innerHTML = `<span class="blunder-emoji">💥</span><span class="blunder-cp">${evalTxt}</span>`;
-        marker.appendChild(badge);
-
-      } else if (data.grade) {
-        // Draw ONE non-explosive ghost piece if it's cached but NOT a blunder
-        const m = data.bestMove;
+    if (data.blunders.length > 0) {
+      // Draw all ghost pieces (max 4 per square to prevent overflow)
+      const group = data.blunders.slice(0, 4);
+      group.forEach((m, idx) => {
         const imgFile = (m.color === 'w' ? 'w' : 'b') + m.piece.toUpperCase();
         const img = document.createElement('img');
         img.src = `img/chesspieces/wikipedia/${imgFile}.png`;
-        img.className = `blunder-piece count-1 idx-0 dim`;
+        img.className = `blunder-piece count-${group.length} idx-${idx}`;
         marker.appendChild(img);
-      }
+      });
 
-      // If it has a cached future grade, append the grade tag in the top right
-      if (data.grade) {
-        const gradeTag = document.createElement('div');
-        gradeTag.className = `future-grade-tag grade-${data.grade}`;
-        gradeTag.textContent = data.grade;
-        marker.appendChild(gradeTag);
-      }
+      // Explosion badge (bottom-center)
+      const badge = document.createElement('div');
+      const avgEval = group.reduce((sum, m) => sum + m.evalPawns, 0) / group.length;
 
-      container.appendChild(marker);
-    });
+      // Determine if this is an "improving" move or a "blunder" for styling
+      const isImproving = avgEval > 0.05;
+      badge.className = 'blunder-badge' + (isImproving ? ' improving' : '');
+
+      let evalTxt = (Math.abs(avgEval) < 0.001) ? '=0' : (avgEval >= 0 ? '↑' : '↓') + Math.abs(avgEval).toFixed(1).replace(/\.0$/, '');
+      
+      const emoji = isImproving ? '' : '<span class="blunder-emoji">💥</span>';
+      badge.innerHTML = `${emoji}<span class="blunder-cp">${evalTxt}</span>`;
+      marker.appendChild(badge);
+
+    } else if (data.bestMove) {
+      // Draw ONE non-explosive ghost piece if it's cached but NOT a blunder
+      const m = data.bestMove;
+      const imgFile = (m.color === 'w' ? 'w' : 'b') + m.piece.toUpperCase();
+      const img = document.createElement('img');
+      img.src = `img/chesspieces/wikipedia/${imgFile}.png`;
+      img.className = `blunder-piece count-1 idx-0 ${data.grade ? 'dim' : ''}`;
+      marker.appendChild(img);
+
+      // Add badge for single-move hover if not just a cached grade piece
+      if (!data.grade || data.isHover) {
+        const badge = document.createElement('div');
+        const isImproving = m.evalPawns > 0.05;
+        badge.className = 'blunder-badge' + (isImproving ? ' improving' : '');
+        let evalTxt = (Math.abs(m.evalPawns) < 0.001) ? '=0' : (m.evalPawns >= 0 ? '↑' : '↓') + Math.abs(m.evalPawns).toFixed(1).replace(/\.0$/, '');
+        const emoji = isImproving ? '' : '<span class="blunder-emoji">💥</span>';
+        badge.innerHTML = `${emoji}<span class="blunder-cp">${evalTxt}</span>`;
+        marker.appendChild(badge);
+      }
+    }
+
+    // If it has a cached future grade, append the grade tag in the top right
+    if (data.grade) {
+      const gradeTag = document.createElement('div');
+      gradeTag.className = `future-grade-tag grade-${data.grade}`;
+      gradeTag.textContent = data.grade;
+      marker.appendChild(gradeTag);
+    }
+
+    container.appendChild(marker);
+  }
+
+  function showSingleMoveGhost(move) {
+    const mainOverlay = document.getElementById('blunder-overlay');
+    if (!mainOverlay) return;
+
+    // 1. Hide the default overlay
+    mainOverlay.style.display = 'none';
+
+    // 2. Create a temporary hover overlay
+    let hoverOverlay = document.getElementById('hover-ghost-overlay');
+    if (!hoverOverlay) {
+      hoverOverlay = document.createElement('div');
+      hoverOverlay.id = 'hover-ghost-overlay';
+      hoverOverlay.className = 'blunder-overlay'; // Reuse structural class
+      // Append it to the same parent as the blunder overlay
+      mainOverlay.parentElement.appendChild(hoverOverlay);
+    }
+    hoverOverlay.innerHTML = '';
+    hoverOverlay.style.display = 'block';
+
+    // 3. Render the single ghost correctly
+    const isFlipped = document.getElementById('board').classList.contains('flipped');
+    const sq = move.to || move.uci.slice(2, 4);
+    _renderSquareGhosts(hoverOverlay, sq, { blunders: [], grade: null, bestMove: move, isHover: true }, isFlipped);
+  }
+
+  function hideSingleMoveGhost() {
+    const mainOverlay = document.getElementById('blunder-overlay');
+    const hoverOverlay = document.getElementById('hover-ghost-overlay');
+    if (mainOverlay) mainOverlay.style.display = 'block';
+    if (hoverOverlay) hoverOverlay.style.display = 'none';
   }
 
   function clearBlunderOverlay(keepCache = false) {

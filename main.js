@@ -11,6 +11,7 @@
   let queuedFen = null;
   let currentFen = null;
   let currentPipelineId = 0;
+  let isImporting = false;
 
   // -------------------------------------------------------------------------
   // Instantiate core objects
@@ -70,6 +71,7 @@
   document.getElementById('btn-flip').addEventListener('click', () => UI.flipBoard());
   document.getElementById('btn-reset').addEventListener('click', () => { UI.resetBoard(); UI.clearBlunderOverlay(); });
   document.getElementById('btn-undo').addEventListener('click', () => UI.undoMove());
+  document.getElementById('btn-next').addEventListener('click', () => UI.nextMove());
   document.getElementById('btn-clear-cache').addEventListener('click', async () => {
     await BBI.Cache.clear();
     UI.resetBoard();
@@ -112,30 +114,114 @@
   }
 
   // -------------------------------------------------------------------------
+  // PGN Import & Game Review
+  // -------------------------------------------------------------------------
+  async function importPGN() {
+    if (isImporting) {
+      UI.showToast('Another import is already in progress.', 'warning');
+      return;
+    }
+
+    const pgnEl = document.getElementById('pgn-input');
+    const pgn = pgnEl.value.trim();
+    if (!pgn) return;
+
+    const tempChess = new Chess();
+    if (!tempChess.load_pgn(pgn)) {
+      UI.showToast('Invalid PGN format.', 'error');
+      return;
+    }
+
+    isImporting = true;
+    const history = tempChess.history({ verbose: true });
+    
+    // UI Progress Setup
+    const progContainer = document.getElementById('pgn-progress-container');
+    const progFill = document.getElementById('pgn-progress-fill');
+    const progText = document.getElementById('pgn-progress-text');
+    
+    progContainer.classList.remove('hidden');
+    progFill.style.width = '0%';
+    progText.textContent = `0 / ${history.length + 1}`;
+
+    try {
+      // Reset board to the PGN's starting position
+      const pgnHeader = tempChess.header();
+      const startFen = pgnHeader.FEN || 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
+      
+      chess.load(startFen);
+      board.position(startFen);
+      UI.updateStatus();
+
+      // Use a fresh chess instance to step through
+      const walkChess = new Chess(startFen);
+      
+      UI.showToast(`Hydrating ${history.length} moves...`, 'info');
+
+      // 1. Evaluate starting position
+      await triggerBBIPipeline(startFen, null);
+      progFill.style.width = `${(1 / (history.length + 1)) * 100}%`;
+      progText.textContent = `1 / ${history.length + 1}`;
+
+      // 2. Loop through moves
+      for (let i = 0; i < history.length; i++) {
+          if (!isImporting) break;
+
+          const move = history[i];
+          walkChess.move(move);
+          
+          // Hydrate silently
+          await triggerBBIPipeline(walkChess.fen(), move, true, 9);
+          
+          // Update progress
+          const currentCount = i + 2;
+          const pct = (currentCount / (history.length + 1)) * 100;
+          progFill.style.width = `${pct}%`;
+          progText.textContent = `${currentCount} / ${history.length + 1}`;
+
+          // Give the browser a moment to breathe/render
+          await new Promise(r => setTimeout(r, 20));
+      }
+
+      UI.showToast('Game Review ready!', 'success');
+    } catch (err) {
+      console.error('[PGN Import] Crashed:', err);
+      UI.showToast('Import interrupted by an error.', 'error');
+    } finally {
+      isImporting = false;
+      setTimeout(() => progContainer.classList.add('hidden'), 5000);
+    }
+  }
+
+  document.getElementById('btn-import-pgn').addEventListener('click', importPGN);
+
+  // -------------------------------------------------------------------------
   // Pipeline orchestration
   // -------------------------------------------------------------------------
   // (pipelineRunning and queuedFen declared at top of IIFE)
 
-  async function triggerBBIPipeline(fen, executedMove) {
+  async function triggerBBIPipeline(fen, executedMove, silent = false, depthOverride = null) {
     const pipelineId = ++currentPipelineId;
     workerHelper.clear(); // Interrupt Stockfish
-    UI.clearBestMoveArrow(); // Clear old arrow immediately
-    UI.clearScorePanel();    // Clear old scores to avoid confusion
-    UI.clearBlunderOverlay(); // Clear old ghosts
+
+    if (!silent) {
+      isImporting = false; // Abort any active PGN hydration on manual move
+      UI.clearBestMoveArrow(); 
+      UI.clearScorePanel();    
+      UI.clearBlunderOverlay();
+    }
 
     const prevFen = currentFen;
     currentFen = fen || chess.fen();
 
-    // Update FEN display
-    document.getElementById('fen-input').value = currentFen;
-
+    if (!silent) document.getElementById('fen-input').value = currentFen;
     if (!modelLoaded) return;
 
     pipelineRunning = true;
-    UI.showLoading(true, 'Evaluating position...', 0);
+    if (!silent) UI.showLoading(true, 'Evaluating position...', 0);
 
     try {
-      const depth = parseInt(document.getElementById('depth-slider').value, 10);
+      const depth = depthOverride || parseInt(document.getElementById('depth-slider').value, 10);
       const seeThreshold = parseFloat(document.getElementById('see-slider').value);
 
       // Clone the board to isolate this pipeline run from future UI mutations (e.g. Undo, Next Move)
@@ -144,7 +230,7 @@
       const result = await BBI.runPipeline(pipelineChess, workerHelper, {
         seeThreshold, depth,
         onProgress: (pct) => {
-          if (currentPipelineId === pipelineId) UI.updateProgress(pct);
+          if (!silent && currentPipelineId === pipelineId) UI.updateProgress(pct);
         }
       });
 
@@ -156,13 +242,16 @@
         const sScale = parseFloat(document.getElementById('see-slider').value);
         const prevKey = BBI.getCacheKey(prevFen, dScale, sScale);
         const prevCache = await BBI.Cache.get(prevKey);
+        
         if (prevCache) {
           const uci = executedMove.from + executedMove.to + (executedMove.promotion || '');
-          let mMatch = prevCache.moveTable.find(m => m.uci === uci);
+          
+          // 1. Track navigation
+          prevCache.lastNavigatedUci = uci;
 
+          // 2. Retroactive grading
+          let mMatch = prevCache.moveTable.find(m => m.uci === uci);
           if (!mMatch) {
-            // Fringe move manually explored by the user that the engine initially discarded.
-            // Dynamically inject it into the cache trace so its future grade trap persists!
             mMatch = {
               uci: uci,
               san: executedMove.san,
@@ -176,11 +265,13 @@
             };
             prevCache.moveTable.push(mMatch);
           }
-
           mMatch.futureGrade = result.grade;
+          
           await BBI.Cache.set(prevKey, prevCache);
         }
       }
+
+      if (silent) return result; // Return early for background hydration
 
       UI.updateScorePanel(result);
       UI.updateMoveHeatmap(result.moveTable, result.source);

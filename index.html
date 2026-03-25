@@ -67,10 +67,10 @@
         <!-- Board buttons -->
         <div class="board-controls">
           <button id="btn-flip" class="btn btn-secondary">⇅ Flip</button>
-          <button id="btn-undo" class="btn btn-secondary">↩ Previous</button>
+          <button id="btn-undo" class="btn btn-secondary">↩ Prev.</button>
+          <button id="btn-next" class="btn btn-secondary">Next ↪</button>
           <button id="btn-reset" class="btn btn-secondary">↺ Start Position</button>
-          <button id="btn-clear-cache" class="btn btn-secondary" title="Clear saved calculations">🗑 Clear
-            Cache</button>
+          <button id="btn-clear-cache" class="btn btn-secondary" title="Clear engine memory">🗑</button>
         </div>
 
         <!-- FEN input -->
@@ -99,6 +99,21 @@
               <input type="checkbox" id="toggle-onesided">
               <span class="switch-slider"></span>
             </label>
+          </div>
+        </div>
+
+        <!-- Game Review -->
+        <div class="settings-panel" style="margin-top: 20px;">
+          <h3 style="margin: 0 0 10px 0; font-size: 0.9rem; color: #fff;">Game Review</h3>
+          <p style="font-size: 0.75rem; color: #8b949e; margin-bottom: 8px;">Paste PGN to pre-hydrate engine cache</p>
+          <textarea id="pgn-input" placeholder="1. e4 e5 2. Nf3 Nc6..." rows="3" style="width:100%; height:80px;"></textarea>
+          <button id="btn-import-pgn" class="btn btn-primary" style="margin-top: 10px; width: 100%;">Import PGN</button>
+          
+          <div id="pgn-progress-container" class="pgn-progress-container hidden" style="margin-top: 10px;">
+            <div class="pgn-progress-bar">
+              <div id="pgn-progress-fill" class="pgn-progress-fill"></div>
+            </div>
+            <div id="pgn-progress-text" class="pgn-progress-text">0/0</div>
           </div>
         </div>
 
@@ -209,11 +224,11 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.10.3/chess.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/ort.min.js"></script>
 
-  <script src="see.js?v=66"></script>
-  <script src="maia.js?v=66"></script>
-  <script src="bbi.js?v=66"></script>
-  <script src="ui.js?v=66"></script>
-  <script src="main.js?v=66"></script>
+  <script src="see.js?v=71"></script>
+  <script src="maia.js?v=71"></script>
+  <script src="bbi.js?v=71"></script>
+  <script src="ui.js?v=71"></script>
+  <script src="main.js?v=71"></script>
 
 </body>
 

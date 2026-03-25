@@ -500,8 +500,35 @@ const UI = (() => {
     if (el) el.remove();
   }
 
+  async function nextMove() {
+    const depth = parseInt(document.getElementById('depth-slider').value, 10);
+    const seeThreshold = parseFloat(document.getElementById('see-slider').value);
+    const cacheKey = BBI.getCacheKey(chess.fen(), depth, seeThreshold);
+    const cached = await BBI.Cache.get(cacheKey);
+
+    let uci = null;
+    if (cached && cached.lastNavigatedUci) {
+      uci = cached.lastNavigatedUci;
+    } else if (cached && cached.moveTable && cached.moveTable.length > 0) {
+      // Default to the most probable move if no history exists
+      uci = cached.moveTable[0].uci;
+    }
+
+    if (uci) {
+      const move = chess.move(uci, { sloppy: true });
+      if (move) {
+        board.position(chess.fen());
+        updateStatus();
+        if (onMoveCallback) onMoveCallback(chess.fen(), move);
+        return true;
+      }
+    }
+    showToast('No next move cached for this position.', 'info');
+    return false;
+  }
+
   return {
-    init, flipBoard, resetBoard, loadFEN, undoMove, showLoading, updateProgress,
+    init, flipBoard, resetBoard, loadFEN, undoMove, nextMove, showLoading, updateProgress,
     updateScorePanel, clearScorePanel, updateMoveHeatmap,
     updateStatus, showToast, renderBlunderOverlay, clearBlunderOverlay,
     renderBestMoveArrow, clearBestMoveArrow

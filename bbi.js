@@ -87,7 +87,15 @@ const BBICache = (() => {
     } catch { /* ignore */ }
   }
 
-  return { get, set, clear };
+  async function updateMetadata(key, metadata) {
+    const data = await get(key);
+    if (data) {
+      Object.assign(data, metadata);
+      await set(key, data);
+    }
+  }
+
+  return { get, set, clear, updateMetadata };
 })();
 
 // Convert Stockfish cp score to pawn units (capped ±30 for readability)

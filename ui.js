@@ -367,6 +367,7 @@ const UI = (() => {
       });
 
       // Explosion badge (bottom-center)
+      const badge = document.createElement('div');
       const avgDelta = group.reduce((sum, m) => sum + m.relativeDelta, 0) / group.length;
 
       // Determine if this is an "improving" move or a "blunder" for styling

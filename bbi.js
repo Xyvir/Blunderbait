@@ -101,14 +101,19 @@ const BBICache = (() => {
 // Convert Stockfish cp score to pawn units (capped ±30 for readability)
 function cpToPawns(score_cp, score_mate, sideToMove) {
   // sideToMove: 'w' or 'b'. Stockfish always reports from side-to-move perspective.
-  // We convert so that positive = good for the side to move in this position.
+  // We convert so that positive = White winning, negative = Black winning.
+  let val;
   if (score_mate != null) {
     // Forced mate: return a large signed value
-    const sign = score_mate > 0 ? 1 : -1;
-    return sign * 30; // treat as ±30 pawns
+    val = score_mate > 0 ? 30 : -30;
+  } else {
+    val = (score_cp || 0) / 100;
   }
-  const pawns = (score_cp || 0) / 100;
-  return Math.max(-30, Math.min(30, pawns));
+
+  // Stockfish perspective: positive = better for sideToMove.
+  // White perspective: positive = better for White.
+  const whiteRelative = (sideToMove === 'w') ? val : -val;
+  return Math.max(-30, Math.min(30, whiteRelative));
 }
 
 // -------------------------------------------------------------------------
@@ -419,15 +424,19 @@ async function runPipeline(chess, workerHelper, options = {}) {
       });
     }
 
-    return workerHelper.evalMove(fen, pair.uci, depth, priority).then(res => {
+    const nextTurn = testChess.turn();
+    const nextFen = testChess.fen();
+
+    return workerHelper.eval(nextFen, depth, priority).then(res => {
       if (!res) throw new Error('Interrupted');
       tickProgress();
       return {
         ...pair,
         score_cp:   res.score_cp,
         score_mate: res.score_mate,
-        // After opponent's response position, we negate (it's opponent's turn next)
-        evalPawns:  -cpToPawns(res.score_cp, res.score_mate, turn === 'w' ? 'b' : 'w'),
+        // Since cpToPawns now returns a unified White-relative score, 
+        // no negation is needed here regardless of whose turn it is.
+        evalPawns:  cpToPawns(res.score_cp, res.score_mate, nextTurn),
         bbiProb:    pair.bbiProb,
         isPruned:   pair.isPruned,
       };
@@ -530,8 +539,8 @@ async function runPipeline(chess, workerHelper, options = {}) {
   const totalSigProb = sig.reduce((sum, e) => sum + e.prob, 0);
   
   finalEvaluatedList = finalEvaluatedList.map(e => {
-    // A move is unpruned ONLY if it survived SEE AND has sufficient probability
-    const isPruned = !e.isPlausible || e.prob <= probThreshold;
+    // A move is unpruned ONLY if it survived SEE AND (has sufficient probability OR is a hydration candidate)
+    const isPruned = !e.isPlausible || (!e.isHydrationCandidate && e.prob <= probThreshold);
     return {
       ...e,
       isPruned,
@@ -547,7 +556,8 @@ async function runPipeline(chess, workerHelper, options = {}) {
   const expectedEval = finalEvaluated.reduce((sum, e) => sum + e.bbiProb * e.evalPawns, 0);
 
   // --- Step 6: BBI Delta ---
-  const delta = syncedObjectiveEval - expectedEval;
+  // Calculates "Lost Value" from the perspective of the current player.
+  const delta = (syncedObjectiveEval - expectedEval) * (isWhiteTurn ? 1 : -1);
   console.log(`[BBI] Pipeline: delta=${delta.toFixed(3)} (Engine=${syncedObjectiveEval.toFixed(3)} - Human=${expectedEval.toFixed(3)})`);
 
   // --- Step 7: Grade ---
@@ -589,9 +599,10 @@ async function runPipeline(chess, workerHelper, options = {}) {
     see:       e.see,
     evalPawns: e.evalPawns,
     evalAbs:   isWhiteTurn ? e.evalPawns : -e.evalPawns, // White-relative for consistent dashboard display
+    relativeDelta: (e.evalPawns - syncedObjectiveEval) * (isWhiteTurn ? 1 : -1),
     scoreMate: e.score_mate,
     weighted:  e.bbiProb * e.evalPawns,
-    cpLoss:    Math.max(0, syncedObjectiveEval - e.evalPawns), // pawn units lost vs best play
+    cpLoss:    Math.max(0, -((e.evalPawns - syncedObjectiveEval) * (isWhiteTurn ? 1 : -1))), // pawn units lost vs best play
     isPruned:  e.isPruned,
     isHydrated: e.isHydrated || false,
     isHydrationCandidate: e.isHydrationCandidate || false,
@@ -606,7 +617,7 @@ async function runPipeline(chess, workerHelper, options = {}) {
   return finalResult;
 }
 
-const BBI_REVISION = '2026-03-24-v5'; // Increment to invalidate old logic/grading caches
+const BBI_REVISION = '2026-03-25-v6'; // Increment to invalidate old logic/grading caches
 function getCacheKey(fen, depth, seeThreshold) {
   return `${fen}|d${depth}|s${seeThreshold}|${BBI_REVISION}`;
 }

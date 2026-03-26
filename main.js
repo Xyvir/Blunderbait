@@ -215,12 +215,12 @@
           
           loopPrevFen = walkChess.fen();
           
-          // final tick for this move
+          // Give the browser a moment to breathe/render/commit transactions
+          await new Promise(r => setTimeout(r, 500));
+
+          // final tick for this move AFTER the safety delay
           progSpan.textContent = `${i + 2}.00 / ${history.length + 1}`;
           progFill.style.width = `${((i + 2) / (history.length + 1)) * 100}%`;
-
-          // Give the browser a moment to breathe/render/commit transactions
-          await new Promise(r => setTimeout(r, 5));
       }
 
       UI.showToast('Game Review ready!', 'success');

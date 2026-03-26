@@ -121,8 +121,10 @@ const UI = (() => {
     const fmtDelta = v => (v < 0 ? '-' : '') + Math.abs(v).toFixed(2);
 
     // Standard engine notation for Objective Eval: + for White, - for Black
-    const absObj = (turn === 'w') ? objectiveEval : -objectiveEval;
-    const absMate = (turn === 'w') ? (scoreMate || 0) : -(scoreMate || 0);
+    // Standard engine notation for Objective Eval: White-is-Positive ALWAYS
+    const absObj = objectiveEval;
+    // scoreMate is also White-relative internally now
+    const absMate = scoreMate || 0;
 
     let objValText;
     if (isForcedMate && scoreMate !== undefined && scoreMate !== null) {
@@ -194,7 +196,7 @@ const UI = (() => {
       const tr = document.createElement('tr');
       if (row.isPruned) tr.classList.add('pruned-move');
       
-      const evalVal = row.evalPawns;
+      const evalVal = row.relativeDelta;
       const ev = (Math.abs(evalVal) < 0.001) ? '=0.00' : (evalVal >= 0 ? '↑' : '↓') + Math.abs(evalVal).toFixed(2);
       
       const heat = probToHeat(row.prob);
@@ -350,11 +352,11 @@ const UI = (() => {
       // Add badge for single-move hover if not just a cached grade piece
       if (!data.grade || data.isHover) {
         const badge = document.createElement('div');
-        const isImproving = m.evalPawns > 0.05;
+        const isImproving = m.relativeDelta > 0.05;
         badge.className = 'blunder-badge' + (isImproving ? ' improving' : '');
-        let evalTxt = (Math.abs(m.evalPawns) < 0.001) ? '=0' : (m.evalPawns >= 0 ? '↑' : '↓') + Math.abs(m.evalPawns).toFixed(1).replace(/\.0$/, '');
+        const evalText = (Math.abs(m.relativeDelta) < 0.001) ? '=0.00' : (m.relativeDelta >= 0 ? '↑' : '↓') + Math.abs(m.relativeDelta).toFixed(1).replace(/\.0$/, '');
         const emoji = isImproving ? '' : '<span class="blunder-emoji">💥</span>';
-        badge.innerHTML = `${emoji}<span class="blunder-cp">${evalTxt}</span>`;
+        badge.innerHTML = `${emoji}<span class="blunder-cp">${evalText}</span>`;
         marker.appendChild(badge);
       }
     }

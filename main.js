@@ -69,6 +69,8 @@
       loader.classList.add('hidden');
       setTimeout(() => loader.remove(), 500); // cleanup from DOM
     }
+
+    updateTrashUI();
   });
 
   // -------------------------------------------------------------------------
@@ -79,10 +81,17 @@
   document.getElementById('btn-undo').addEventListener('click', () => UI.undoMove());
   document.getElementById('btn-next').addEventListener('click', () => UI.nextMove());
   document.getElementById('btn-clear-cache').addEventListener('click', async () => {
+    isImporting = false;
+    workerHelper.clearQueue();
+
+    const progContainer = document.getElementById('pgn-progress-container');
+    if (progContainer) progContainer.classList.add('hidden');
+
     await BBI.Cache.clear();
     UI.resetBoard();
     UI.clearBlunderOverlay();
-    UI.showToast('Memory wiped and returned to Start', 'success');
+    UI.showToast('Memory cleared and analysis stopped.', 'success');
+    updateTrashUI();
   });
 
   document.getElementById('btn-set-fen').addEventListener('click', () => {
@@ -155,7 +164,7 @@
     const pgnHeader = tempChess.header();
     const startFen = pgnHeader.FEN || 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
     
-    UI.showToast(`Hydrating ${history.length} moves...`, 'info');
+    UI.showToast(`Analyzing ${history.length} moves...`, 'info');
 
     // UI.loadFEN updates visual board and global chess state.
     // We load it silently so it doesn't trigger its own non-silent pipeline which would abort our import.
@@ -221,9 +230,12 @@
           // final tick for this move AFTER the safety delay
           progSpan.textContent = `${i + 2}.00 / ${history.length + 1}`;
           progFill.style.width = `${((i + 2) / (history.length + 1)) * 100}%`;
+          
+          // Allow navigation to this move immediately as it's analyzed
+          UI.updateStatus();
       }
 
-      UI.showToast('Game Review ready!', 'success');
+      UI.showToast('Analysis complete!', 'success');
       
       // Refresh the UI for the starting position to show hydrated grades/badges
       await triggerBBIPipeline(chess.fen(), null);
@@ -233,6 +245,7 @@
     } finally {
       isImporting = false;
       setTimeout(() => progContainer.classList.add('hidden'), 5000);
+      updateTrashUI();
     }
   }
 
@@ -412,7 +425,30 @@
       if (currentPipelineId === pipelineId) {
         pipelineRunning = false;
         UI.showLoading(false);
+        updateTrashUI();
+      } else {
+        // Even for silent runs, we might have added new data
+        updateTrashUI();
       }
+    }
+  }
+
+  async function updateTrashUI() {
+    const btn = document.getElementById('btn-clear-cache');
+    if (!btn) return;
+
+    try {
+      const count = await BBI.Cache.count();
+      btn.title = `Clear ${count} analyzed positions from local storage`;
+      
+      // Smoky and non-clickable if only the starting position exists
+      if (count <= 1) {
+        btn.classList.add('btn-inactive');
+      } else {
+        btn.classList.remove('btn-inactive');
+      }
+    } catch (e) {
+      console.error('[Trash UI] Failed to update:', e);
     }
   }
 

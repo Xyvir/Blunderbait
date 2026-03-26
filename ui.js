@@ -68,6 +68,7 @@ const UI = (() => {
     board.start();
     clearScorePanel();
     clearBestMoveArrow();
+    updateStatus();
     if (onMoveCallback) onMoveCallback(chess.fen(), null);
   }
 
@@ -82,7 +83,10 @@ const UI = (() => {
 
   function undoMove() {
     const move = chess.undo();
-    if (!move) return;
+    if (!move) {
+      showToast('No previous moves to undo.', 'info');
+      return;
+    }
     board.position(chess.fen());
     clearBestMoveArrow();
     updateStatus();
@@ -143,8 +147,8 @@ const UI = (() => {
     objCard.classList.add('metric-card-purple');
     
     objEl.classList.remove('text-white', 'text-black');
-    if (absObj > 0.3)      objEl.classList.add('text-white');
-    else if (absObj < -0.3) objEl.classList.add('text-black');
+    if (absObj > 0.01)      objEl.classList.add('text-white');
+    else if (absObj < -0.01) objEl.classList.add('text-black');
 
     // Expected Eval remains side-to-move relative (standard for "Human Outcome")
     const expEl = document.getElementById('exp-eval');
@@ -242,6 +246,34 @@ const UI = (() => {
     if (wrapper) {
       wrapper.classList.remove('turn-w', 'turn-b');
       wrapper.classList.add(`turn-${chess.turn()}`);
+    }
+
+    updateNavButtons();
+  }
+
+  async function updateNavButtons() {
+    const undoBtn = document.getElementById('btn-undo');
+    const nextBtn = document.getElementById('btn-next');
+    const resetBtn = document.getElementById('btn-reset');
+    
+    // Undo: disabled if no history
+    if (undoBtn) {
+      undoBtn.classList.toggle('btn-disabled', chess.history().length === 0);
+    }
+
+    // Reset: smoky and non-clickable if already at start FEN
+    if (resetBtn) {
+      const startFen = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
+      resetBtn.classList.toggle('btn-inactive', chess.fen() === startFen);
+    }
+    
+    // Next: disabled if no cached navigation path
+    if (nextBtn) {
+      const depth = parseInt(document.getElementById('depth-slider').value, 10);
+      const seeThreshold = parseFloat(document.getElementById('see-slider').value);
+      const cacheKey = BBI.getCacheKey(chess.fen(), depth, seeThreshold);
+      const cached = await BBI.Cache.get(cacheKey);
+      nextBtn.classList.toggle('btn-disabled', !(cached && cached.lastNavigatedUci));
     }
   }
 
@@ -522,7 +554,7 @@ const UI = (() => {
         return true;
       }
     }
-    showToast('No next move cached for this position.', 'info');
+    showToast('No further analyzed moves found.', 'info');
     return false;
   }
 

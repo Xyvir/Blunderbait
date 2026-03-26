@@ -95,7 +95,19 @@ const BBICache = (() => {
     }
   }
 
-  return { get, set, clear, updateMetadata };
+  async function count() {
+    try {
+      const db = await initDB();
+      return await new Promise((resolve, reject) => {
+        const tx = db.transaction(STORE_NAME, 'readonly');
+        const req = tx.objectStore(STORE_NAME).count();
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject('Count failed');
+      });
+    } catch { return memCache.size; }
+  }
+
+  return { get, set, clear, count, updateMetadata };
 })();
 
 // Convert Stockfish cp score to pawn units (capped ±30 for readability)
@@ -322,8 +334,8 @@ async function runPipeline(chess, workerHelper, options = {}) {
   const probThreshold = 0.02; // Global threshold (2.0%)
   let plausible = SEE.filterByPlausibility(chess, rawProbs, seeThreshold);
   
-  // --- Step 2.1: Identify Hydration Candidates (+2.5 SEE) ---
-  const hydrationCandidates = SEE.scanForHydration(chess, 2.5);
+  // --- Step 2.1: Identify Hydration Candidates (+1.5 SEE) ---
+  const hydrationCandidates = SEE.scanForHydration(chess, 1.5);
   console.log(`[BBI] SEE Hydration Scan found ${hydrationCandidates.length} candidate moves.`);
   hydrationCandidates.forEach(m => {
     const uci = m.from + m.to + (m.promotion || '');

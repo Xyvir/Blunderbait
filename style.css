@@ -383,6 +383,16 @@ html, body {
   flex: 1;
 }
 .btn-secondary:hover { background: var(--bg-card); color: var(--text-primary); }
+.btn-disabled {
+  opacity: 0.3;
+  filter: grayscale(1);
+}
+.btn-inactive {
+  opacity: 0.3;
+  filter: grayscale(1);
+  pointer-events: none;
+  cursor: default;
+}
 
 /* ── Settings ── */
 .settings-panel {

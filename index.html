@@ -41,7 +41,7 @@
         <img src="logo.jpg" class="logo-img" alt="BBI Logo" />
         <div>
           <h1 class="header-title">Blunderbait Explorer</h1>
-          <p class="header-sub">Map the minefield. Punish the blunder.</p>
+          <p class="header-sub">Map the minefield and punish quiet blunders.</p>
         </div>
       </div>
       <div class="header-right">
@@ -105,10 +105,11 @@
         <!-- Game Review -->
         <div class="settings-panel" style="margin-top: 20px;">
           <h3 style="margin: 0 0 10px 0; font-size: 0.9rem; color: #fff;">Game Review</h3>
-          <p style="font-size: 0.75rem; color: #8b949e; margin-bottom: 8px;">Paste PGN to pre-hydrate engine cache</p>
-          <textarea id="pgn-input" placeholder="1. e4 e5 2. Nf3 Nc6..." rows="3" style="width:100%; height:80px;"></textarea>
+          <p style="font-size: 0.75rem; color: #8b949e; margin-bottom: 8px;">Paste PGN to pre-analyze positions</p>
+          <textarea id="pgn-input" placeholder="1. e4 e5 2. Nf3 Nc6..." rows="3"
+            style="width:100%; height:80px;"></textarea>
           <button id="btn-import-pgn" class="btn btn-primary" style="margin-top: 10px; width: 100%;">Import PGN</button>
-          
+
           <div id="pgn-progress-container" class="pgn-progress-container hidden" style="margin-top: 10px;">
             <div class="pgn-progress-bar">
               <div id="pgn-progress-fill" class="pgn-progress-fill"></div>

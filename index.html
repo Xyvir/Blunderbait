@@ -69,8 +69,9 @@
           <button id="btn-flip" class="btn btn-secondary">⇅ Flip</button>
           <button id="btn-undo" class="btn btn-secondary">↩ Prev.</button>
           <button id="btn-next" class="btn btn-secondary">Next ↪</button>
-          <button id="btn-reset" class="btn btn-secondary">↺ Start Position</button>
-          <button id="btn-clear-cache" class="btn btn-secondary" title="Clear engine memory">🗑</button>
+          <button id="btn-reset" class="btn btn-secondary">↺ Start</button>
+          <button id="btn-recalculate" class="btn btn-secondary btn-icon btn-icon-orange" title="Recalculate">🖩</button>
+          <button id="btn-clear-cache" class="btn btn-secondary btn-icon btn-icon-red" title="Clear engine memory">🗑</button>
         </div>
 
         <!-- FEN input -->
@@ -83,13 +84,13 @@
         <div class="settings-panel">
           <div class="setting-row">
             <label class="setting-label">Engine Depth</label>
-            <input id="depth-slider" type="range" min="4" max="18" value="12" class="slider" />
-            <span id="depth-label" class="setting-value">12</span>
+            <input id="depth-slider" type="range" min="4" max="18" value="15" class="slider" />
+            <span id="depth-label" class="setting-value">15</span>
           </div>
           <div class="setting-row">
-            <label class="setting-label">SEE Threshold</label>
-            <input id="see-slider" type="range" min="-5" max="0" step="0.5" value="-2" class="slider" />
-            <span id="see-label" class="setting-value">-2</span>
+            <label class="setting-label">Hung Piece Pruning</label>
+            <input id="see-slider" type="range" min="-6" max="0" step="0.5" value="-6" class="slider" />
+            <span id="see-label" class="setting-value">Off</span>
           </div>
           <div class="setting-row" style="margin-top:4px;">
             <label class="setting-label"
@@ -217,7 +218,7 @@
 
     <!-- Footer -->
     <footer class="footer">
-      <span>BBI Calculator &mdash; Powered by Maia 1500 + Stockfish &amp; chess.js</span>
+      <span>BBI Calculator &mdash; Powered by Maia 1900 + Stockfish &amp; chess.js</span>
     </footer>
 
   </div><!-- /.app -->

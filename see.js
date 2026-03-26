@@ -107,7 +107,7 @@ function filterByPlausibility(chess, moveProbPairs, threshold = -2.0) {
     const globalPenalty = getHangingPenalty(copy);
 
     const effectiveSee = moveSee - globalPenalty;
-    const isPlausible = effectiveSee >= threshold;
+    const isPlausible = (threshold <= -5.6) ? true : (effectiveSee >= threshold);
     
     return { ...pair, see: effectiveSee, isPlausible };
   });

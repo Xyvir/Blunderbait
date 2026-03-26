@@ -282,7 +282,7 @@ const MAIA = (() => {
       return false;
     }
   }
-  async function getMaiaProbs(chess, eloSelf = 1500, eloOppo = 1500) {
+  async function getMaiaProbs(chess, eloSelf = 1900, eloOppo = 1900) {
     if (!session) throw new Error('Maia model not loaded.');
 
     const isBlack = chess.turn() === 'b';

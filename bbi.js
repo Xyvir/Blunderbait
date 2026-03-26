@@ -8,18 +8,18 @@
 function gradeFromDelta(delta, objectiveEval, isForcedMate, expectedEval) {
   // If the active player has a forced mate in their favor, they're winning!
   // This isn't a trap for them—it means the *opponent* played a suicidal blunder.
-  if (isForcedMate && objectiveEval > 0) return 'F'; 
- 
-  if (delta >= 9.0)  return 'S'; 
-  if (delta >= 5.0)  return 'A'; 
-  if (delta >= 3.0)  return 'B'; 
-  if (delta >= 1.5)  return 'C'; 
-  
+  if (isForcedMate && objectiveEval > 0) return 'F';
+
+  if (delta >= 9.0) return 'S';
+  if (delta >= 5.0) return 'A';
+  if (delta >= 3.0) return 'B';
+  if (delta >= 1.5) return 'C';
+
   // D rank is now the default for anything < 1.5 delta (including negative)
   // EXCEPT for crushing advantages which get F rank
   if (expectedEval >= 5.0 || expectedEval <= -5.0) return 'F';
-  
-  return 'D';                    
+
+  return 'D';
 }
 
 // -------------------------------------------------------------------------
@@ -64,8 +64,8 @@ const BBICache = (() => {
         };
         req.onerror = () => resolve(memCache.get(fen) || null);
       });
-    } catch { 
-      return memCache.get(fen) || null; 
+    } catch {
+      return memCache.get(fen) || null;
     }
   }
 
@@ -107,7 +107,16 @@ const BBICache = (() => {
     } catch { return memCache.size; }
   }
 
-  return { get, set, clear, count, updateMetadata };
+  async function remove(key) {
+    memCache.delete(key);
+    try {
+      const db = await initDB();
+      const tx = db.transaction(STORE_NAME, 'readwrite');
+      tx.objectStore(STORE_NAME).delete(key);
+    } catch { /* ignore */ }
+  }
+
+  return { get, set, remove, clear, count, updateMetadata };
 })();
 
 // Convert Stockfish cp score to pawn units (capped ±30 for readability)
@@ -135,10 +144,10 @@ function cpToPawns(score_cp, score_mate, sideToMove) {
 class WorkerHelper {
   constructor() {
     // Use stockfish.js as the worker source directly
-    this.sf       = new Worker('./stockfish.js');
-    this.pending  = [];       // queue of {resolve, score_cp, score_mate, pv}
-    this.active   = null;     // currently running job
-    this.ready    = false;
+    this.sf = new Worker('./stockfish.js');
+    this.pending = [];       // queue of {resolve, score_cp, score_mate, pv}
+    this.active = null;     // currently running job
+    this.ready = false;
 
     this.sf.onmessage = (e) => this._handleLine(
       typeof e === 'string' ? e : (e.data ?? '')
@@ -171,19 +180,24 @@ class WorkerHelper {
     if (!job) return;
 
     if (line.startsWith('info') && line.includes('score')) {
-      const cpM   = line.match(/score cp (-?\d+)/);
+      const cpM = line.match(/score cp (-?\d+)/);
       const mateM = line.match(/score mate (-?\d+)/);
-      const pvM   = line.match(/ pv (.+)/);
-      if (cpM)   { job.score_cp = parseInt(cpM[1], 10); job.score_mate = null; }
+      const pvM = line.match(/ pv (.+)/);
+      if (cpM) { job.score_cp = parseInt(cpM[1], 10); job.score_mate = null; }
       if (mateM) { job.score_mate = parseInt(mateM[1], 10); job.score_cp = null; }
-      if (pvM)   job.pv = pvM[1].trim();
+      if (pvM) job.pv = pvM[1].trim();
     }
 
     if (line.startsWith('bestmove')) {
       job.bestmove = line.split(' ')[1];
-      this.active  = null;
-      job.resolve({ score_cp: job.score_cp, score_mate: job.score_mate,
-                    bestmove: job.bestmove, pv: job.pv || '' });
+      this.active = null;
+      job.resolve({
+        score_cp: job.score_cp, 
+        score_mate: job.score_mate,
+        bestmove: job.bestmove, 
+        pv: job.pv || '',
+        fen: job.fen // Return the FEN this result belongs to
+      });
       this._runNext();
     }
   }
@@ -191,25 +205,31 @@ class WorkerHelper {
   _runNext() {
     if (this.active || !this.ready || this.pending.length === 0) return;
     this.active = this.pending.shift();
+    if (this.active.interrupted) {
+      this.active = null;
+      return this._runNext();
+    }
     this.active.start(this.sf);
   }
 
   _enqueue(fen, move, depth, priority = false) {
     return new Promise((resolve) => {
       const job = {
+        fen, // Store FEN for verification
         resolve, score_cp: null, score_mate: null, pv: '', bestmove: null,
+        interrupted: false,
         start(sf) {
           if (move) {
-            console.log(`[Stockfish] ${priority ? '[PRIORITY] ' : ''}Evaluating move: ${move} at depth ${depth}`);
+            console.log(`[Stockfish] ${priority ? '[PRIORITY] ' : ''}Searching ${move} at depth ${depth}`);
             sf.postMessage(`position fen ${fen} moves ${move}`);
           } else {
-            console.log(`[Stockfish] ${priority ? '[PRIORITY] ' : ''}Evaluating root position at depth ${depth}`);
+            console.log(`[Stockfish] ${priority ? '[PRIORITY] ' : ''}Searching position at depth ${depth}`);
             sf.postMessage(`position fen ${fen}`);
           }
           sf.postMessage(`go depth ${depth}`);
         },
       };
-      
+
       if (priority) {
         this.pending.unshift(job);
       } else {
@@ -219,12 +239,13 @@ class WorkerHelper {
     });
   }
 
-  eval(fen, depth = 12, priority = false)            { return this._enqueue(fen, null,  depth, priority); }
-  evalMove(fen, move, depth = 12, priority = false)  { return this._enqueue(fen, move,  depth, priority); }
+  eval(fen, depth = 15, priority = false) { return this._enqueue(fen, null, depth, priority); }
+  evalMove(fen, move, depth = 15, priority = false) { return this._enqueue(fen, move, depth, priority); }
 
   interruptActive() {
     if (this.active) {
       console.log('[Stockfish] Interrupting active task...');
+      this.active.interrupted = true;
       this.active.resolve(null);
       this.active = null;
     }
@@ -236,14 +257,20 @@ class WorkerHelper {
   }
 
   clearQueue() {
-    if (this.active) this.active.resolve(null);
-    for (const job of this.pending) job.resolve(null);
+    if (this.active) {
+      this.active.interrupted = true;
+      this.active.resolve(null);
+    }
+    for (const job of this.pending) {
+      job.interrupted = true;
+      job.resolve(null);
+    }
     this.pending = [];
     this.active = null;
     this.ready = false; 
     if (this.sf) {
-        this.sf.postMessage('stop');
-        this.sf.postMessage('isready');
+      this.sf.postMessage('stop');
+      this.sf.postMessage('isready');
     }
   }
 
@@ -258,14 +285,14 @@ class WorkerHelper {
 async function runPipeline(chess, workerHelper, options = {}) {
   const {
     seeThreshold = -2.0,
-    depth        = 12,
-    maxMoves     = 20,   // cap plausible moves to evaluate for speed
-    onProgress   = null, // callback for progress bar
-    priority     = false,
+    depth = 15,
+    maxMoves = 20,   // cap plausible moves to evaluate for speed
+    onProgress = null, // callback for progress bar
+    priority = false,
   } = options;
 
-  const fen      = chess.fen();
-  const turn     = chess.turn();
+  const fen = chess.fen();
+  const turn = chess.turn();
 
   // Check cache first (Key now includes depth, threshold, and logic revision)
   const cacheKey = getCacheKey(fen, depth, seeThreshold);
@@ -283,9 +310,9 @@ async function runPipeline(chess, workerHelper, options = {}) {
     const isCheckmate = chess.in_checkmate();
     const terminalEval = isCheckmate ? (isWhiteTurn ? -10.0 : 10.0) : 0.0;
     if (onProgress) onProgress(1);
-    
+
     // skull emojis for white vs black checkmated
-    const skull = isWhiteTurn ? '☠️' : '💀'; 
+    const skull = isWhiteTurn ? '☠️' : '💀';
 
     return {
       fen,
@@ -314,26 +341,26 @@ async function runPipeline(chess, workerHelper, options = {}) {
     console.error('[BBI] Maia error:', err);
     // Fallback: uniform distribution over legal moves
     const moves = chess.moves({ verbose: true });
-    const prob  = 1 / moves.length;
+    const prob = 1 / moves.length;
     rawProbs = moves.map(m => ({ move: m, uci: m.from + m.to + (m.promotion || ''), prob }));
     source = 'Fallback (Uniform)';
   }
 
   console.log(`[BBI] Sourced from ${source}: ${rawProbs.length} moves. WinProb: ${(winProb * 100).toFixed(1)}%`);
-  
+
   // Store original top probability and move for hydration formula
   const topProbPair = rawProbs.length > 0 ? rawProbs[0] : null;
   const maiaTopProb = topProbPair ? topProbPair.prob : 0;
   const maiaTopUCI = topProbPair ? topProbPair.uci : null;
   console.log(`[BBI] Maia Top Move: ${maiaTopUCI} (${(maiaTopProb * 100).toFixed(1)}%)`);
-  
+
   // NEW: Store original WIN probability to ensure syncedObjectiveEval is resilient
   const originalWinProb = winProb;
 
   // --- Step 2: SEE Plausibility Filter ---
   const probThreshold = 0.02; // Global threshold (2.0%)
   let plausible = SEE.filterByPlausibility(chess, rawProbs, seeThreshold);
-  
+
   // --- Step 2.1: Identify Hydration Candidates (+1.5 SEE) ---
   const hydrationCandidates = SEE.scanForHydration(chess, 1.5);
   console.log(`[BBI] SEE Hydration Scan found ${hydrationCandidates.length} candidate moves.`);
@@ -345,13 +372,13 @@ async function runPipeline(chess, workerHelper, options = {}) {
     } else {
       const original = rawProbs.find(p => p.uci === uci);
       const prob = original ? original.prob : 0;
-      plausible.push({ 
-        move: m, 
-        uci, 
-        prob, 
-        see: SEE.computeSEE(chess, m), 
+      plausible.push({
+        move: m,
+        uci,
+        prob,
+        see: SEE.computeSEE(chess, m),
         isPlausible: true, // Hydration candidates are by definition plausible
-        isHydrationCandidate: true 
+        isHydrationCandidate: true
       });
     }
   });
@@ -374,7 +401,7 @@ async function runPipeline(chess, workerHelper, options = {}) {
   if (significant.length > 0) {
     plausible = plausible.map(p => {
       // FIX: Early pruning only happens for SEE failures (blunders)
-      const isPruned = !p.isPlausible; 
+      const isPruned = !p.isPlausible;
       return {
         ...p,
         isPruned,
@@ -395,8 +422,8 @@ async function runPipeline(chess, workerHelper, options = {}) {
   // --- Step 3 & 4 Progress tracking ---
   // Filter out pruned moves (SEA failures) from the evaluation pipeline
   let movesToEval = plausible.filter(p => !p.isPruned).slice(0, maxMoves);
-  console.log(`[BBI] Pipeline: plausible moves=${plausible.length}, searching top=${movesToEval.length} (pruned: ${plausible.filter(p=>p.isPruned).length})`);
-  
+  console.log(`[BBI] Pipeline: plausible moves=${plausible.length}, searching top=${movesToEval.length} (pruned: ${plausible.filter(p => p.isPruned).length})`);
+
   // Ensure all hydration candidates are included in the evaluation
   plausible.filter(p => p.isHydrationCandidate).forEach(c => {
     if (!movesToEval.some(m => m.uci === c.uci)) {
@@ -413,7 +440,23 @@ async function runPipeline(chess, workerHelper, options = {}) {
 
   // --- Step 3: Objective Evaluation of current position ---
   const objResult = await workerHelper.eval(fen, depth, priority);
-  if (!objResult) throw new Error('Interrupted');
+  
+  // --- Step 4.2: Sanity Check ---
+  // Ensure the engine result is for the correct position by verifying move legality AND FEN equality.
+  // This prevents cross-contamination from old searches in the queue.
+  if (!objResult || objResult.fen !== fen) {
+    if (objResult) console.warn(`[BBI] Stale engine result ignored: expected ${fen.split(' ')[0]}, got ${objResult.fen.split(' ')[0]}`);
+    throw new Error('Interrupted');
+  }
+
+  if (objResult.bestmove && objResult.bestmove !== '(none)') {
+    const legalMoves = chess.moves({ verbose: true });
+    const isLegal = legalMoves.some(m => (m.from + m.to + (m.promotion || '')) === objResult.bestmove);
+    if (!isLegal) {
+      console.warn(`[BBI] Illegal engine move detected: ${objResult.bestmove} in ${fen}`);
+      throw new Error('Interrupted');
+    }
+  }
 
   tickProgress();
   let objectiveEval = cpToPawns(objResult.score_cp, objResult.score_mate, turn);
@@ -445,13 +488,13 @@ async function runPipeline(chess, workerHelper, options = {}) {
       tickProgress();
       return {
         ...pair,
-        score_cp:   res.score_cp,
+        score_cp: res.score_cp,
         score_mate: res.score_mate,
         // Since cpToPawns now returns a unified White-relative score, 
         // no negation is needed here regardless of whose turn it is.
-        evalPawns:  cpToPawns(res.score_cp, res.score_mate, nextTurn),
-        bbiProb:    pair.bbiProb,
-        isPruned:   pair.isPruned,
+        evalPawns: cpToPawns(res.score_cp, res.score_mate, nextTurn),
+        bbiProb: pair.bbiProb,
+        isPruned: pair.isPruned,
       };
     });
   });
@@ -464,22 +507,28 @@ async function runPipeline(chess, workerHelper, options = {}) {
   // Always re-normalize at this step so the analyzed subset sums to 100%
   // This effectively removes pruned moves from the probability distribution
   const searchProbSum = rawEvaluated.reduce((sum, e) => sum + e.prob, 0);
-  let normalizedEvaluated = (searchProbSum > 0) 
+  let normalizedEvaluated = (searchProbSum > 0)
     ? rawEvaluated.map(e => ({ ...e, prob: e.prob / searchProbSum }))
     : rawEvaluated;
 
   // --- Step 4.5: Re-sync Objective Evaluation ---
   // If individualized move searches found a better result than the root search, use that as the baseline.
   // This ensures the dashboard doesn't contradict the move list.
-  const bestMoveVal = normalizedEvaluated.length > 0 ? normalizedEvaluated.reduce((max, e) => (e.evalPawns > max ? e.evalPawns : max), -30.0) : objectiveEval;
+  // White-relative perspective: White wants MAX, Black wants MIN.
+  const bestMoveVal = normalizedEvaluated.length > 0
+    ? normalizedEvaluated.reduce((best, e) => {
+      return (isWhiteTurn ? (e.evalPawns > best) : (e.evalPawns < best)) ? e.evalPawns : best;
+    }, isWhiteTurn ? -30.0 : 30.0)
+    : objectiveEval;
+
   const syncedObjectiveEval = (Math.abs(bestMoveVal - objectiveEval) > 0.05 && !isNaN(bestMoveVal)) ? bestMoveVal : objectiveEval;
-  
+
   console.log(`[BBI] Objective Eval: ${objectiveEval.toFixed(2)}, Best Move Eval: ${bestMoveVal.toFixed(2)}, Synced: ${syncedObjectiveEval.toFixed(2)}`);
 
   // --- Step 4.7: SEE Hydration Implementation ---
   // Compare high-SEE moves against Maia's preferred choice (original top probability move)
   const maiaBestMove = normalizedEvaluated.find(e => e.uci === maiaTopUCI);
-  
+
   // FALLBACK: If Maia's top move was pruned or filtered, find the next highest probability move that was evaluated.
   let referenceMove = maiaBestMove;
   if (!referenceMove && normalizedEvaluated.length > 0) {
@@ -495,21 +544,37 @@ async function runPipeline(chess, workerHelper, options = {}) {
 
   let hydrationApplied = false;
   let finalEvaluatedList = normalizedEvaluated.map(e => {
-    if (e.isHydrationCandidate && e.evalPawns > (safeMaiaBestEval + 0.1)) {
-      // Use effectiveMaiaTopProb for a much stronger hydration effect
-      const boost = (e.evalPawns - safeMaiaBestEval) * safeEffectiveProb;
-      if (boost > 0 && isFinite(boost)) {
+    // 1. Identify "Tactical Gems": significant material gain + engine approved
+    const isEngineApproved = isWhiteTurn
+      ? (e.evalPawns >= (syncedObjectiveEval - 1.5))
+      : (e.evalPawns <= (syncedObjectiveEval + 1.5));
+
+    if (e.isHydrationCandidate && isEngineApproved) {
+      // Use effectiveMaiaTopProb as a base to ensure the boost is proportional to the overall confidence
+      const maiaConfidence = Math.max(0.1, safeEffectiveProb);
+
+      // 2. Dynamic Scaling: Boost increases exponentially with the value of the piece captured
+      // e.g. Queen (9) -> 9^1.2 ~= 13.9x boost, Pawn (1) -> 1.0x boost
+      const seeGain = Math.max(1.0, e.see || 1.5);
+      const dynamicWeight = Math.pow(seeGain, 1.2);
+
+      // 3. Accuracy bonus: if this is the absolute best engine move, reward it even more
+      const bestMoveBonus = (e.uci === objResult.bestmove) ? 2.0 : 0.5;
+
+      const totalBoost = (dynamicWeight * 1.5 + bestMoveBonus) * maiaConfidence;
+
+      if (totalBoost > 0 && isFinite(totalBoost)) {
         hydrationApplied = true;
-        console.log(`[BBI] Hydrating move ${e.uci}: eval=${e.evalPawns.toFixed(2)} vs maiaBest=${safeMaiaBestEval.toFixed(2)}, boost=${boost.toFixed(4)}`);
-        return { ...e, prob: e.prob + boost, isHydrated: true, hydrationBoost: boost };
+        console.log(`[BBI] Hydrating tactical gem ${e.uci}: see=${e.see}, boost=${totalBoost.toFixed(4)}`);
+        return { ...e, prob: e.prob + totalBoost, isHydrated: true, hydrationBoost: totalBoost };
       }
     }
     return e;
   });
 
   if (hydrationApplied) {
-    console.log(`[BBI] SEE Hydration successfully applied to ${finalEvaluatedList.filter(e => e.isHydrated).length} moves.`);
-    
+    console.log(`[BBI] Tactical Hydration applied to ${finalEvaluatedList.filter(e => e.isHydrated).length} moves.`);
+
     // RE-NORMALIZE to ensure Expected Eval doesn't explode
     const newSum = finalEvaluatedList.reduce((sum, e) => sum + (isNaN(e.prob) ? 0 : e.prob), 0);
     if (newSum > 0 && isFinite(newSum)) {
@@ -539,10 +604,15 @@ async function runPipeline(chess, workerHelper, options = {}) {
         const uniform = 1 / alternatives.length;
         normalizedAlts = alternatives.map(e => ({ ...e, prob: uniform }));
       }
-      
+
       // 3. Find the best alternative (highest probability, then highest eval)
+      // 3. Find the best tactical alternative for the side to move
       const altTopMove = normalizedAlts.reduce((prev, curr) => {
-        if (Math.abs(curr.prob - prev.prob) < 0.001) return (curr.evalPawns > prev.evalPawns ? curr : prev);
+        if (Math.abs(curr.prob - prev.prob) < 0.001) {
+          // Tie-break with evaluation
+          const isBetter = isWhiteTurn ? (curr.evalPawns > prev.evalPawns) : (curr.evalPawns < prev.evalPawns);
+          return isBetter ? curr : prev;
+        }
         return (curr.prob > prev.prob ? curr : prev);
       });
       const altTopEval = altTopMove.evalPawns;
@@ -550,9 +620,9 @@ async function runPipeline(chess, workerHelper, options = {}) {
 
       // 4. Recalculate book move probabilities
       const updatedBookMoves = bookMovesList.map(bm => {
-        const diff = bm.evalPawns - altTopEval;
+        const diff = (bm.evalPawns - altTopEval) * (isWhiteTurn ? 1 : -1);
         let newProb = 0;
-        
+
         if (diff > 0.1) {
           // Dynamic Multiplier: (Material Diff) * Top Alternative Prob
           newProb = diff * altTopProb;
@@ -581,7 +651,7 @@ async function runPipeline(chess, workerHelper, options = {}) {
   // Final pruning and bbiProb allocation (always runs)
   const sig = finalEvaluatedList.filter(e => e.isPlausible && e.prob > probThreshold);
   const totalSigProb = sig.reduce((sum, e) => sum + e.prob, 0);
-  
+
   finalEvaluatedList = finalEvaluatedList.map(e => {
     // A move is unpruned ONLY if it survived SEE AND (has sufficient probability OR is a hydration candidate)
     const isPruned = !e.isPlausible || (!e.isHydrationCandidate && e.prob <= probThreshold);
@@ -605,19 +675,22 @@ async function runPipeline(chess, workerHelper, options = {}) {
   console.log(`[BBI] Pipeline: delta=${delta.toFixed(3)} (Engine=${syncedObjectiveEval.toFixed(3)} - Human=${expectedEval.toFixed(3)})`);
 
   // --- Step 7: Grade ---
-  // Check if humans have >= 1% chance of blundering into a forced mate (eval drops to -30)
-  const hasHumanFindableMate = finalEvaluated.some(e => e.prob > 0.01 && e.evalPawns <= -20.0);
+  // Check if humans have >= 1% chance of blundering into a forced mate (eval drops for side to move)
+  const hasHumanFindableMate = finalEvaluated.some(e => {
+    const isBlunderMate = isWhiteTurn ? (e.evalPawns <= -20.0) : (e.evalPawns >= 20.0);
+    return e.prob > 0.01 && isBlunderMate;
+  });
   const isLethalTrap = delta >= 4.0 && hasHumanFindableMate;
-  
+
   // Find the most likely Maia move to see if we possess a crushing lead
   const topHumanMove = finalEvaluated.length > 0 ? finalEvaluated.reduce((prev, curr) => (curr.prob > prev.prob ? curr : prev)) : null;
   const topHumanEval = topHumanMove ? topHumanMove.evalPawns : objectiveEval;
 
   let grade = isLethalTrap ? 'SS' : gradeFromDelta(delta, objectiveEval, isForcedMate, expectedEval);
-  
+
   // Crushing lead logic is already handled by gradeFromDelta
   console.log(`[BBI] Pipeline: Assigned Grade=${grade}`);
-  
+
   // Forced move edge case: If there's only one literal legal move, the human cannot blunder.
   // We award an S rank because the correct move is "found" by default.
   const legalMovesCount = chess.moves().length;
@@ -625,7 +698,7 @@ async function runPipeline(chess, workerHelper, options = {}) {
     grade = 'S';
   }
 
-  if (isForcedMate && objectiveEval > 0) grade = 'F'; 
+  if (isForcedMate && objectiveEval > 0) grade = 'F';
   else if (isLethalTrap) grade = 'SS';
 
   // Sort by probability DESC so hydrated moves rise to the top
@@ -633,35 +706,35 @@ async function runPipeline(chess, workerHelper, options = {}) {
 
   // Build move table for display
   const moveTable = finalEvaluated.map(e => ({
-    uci:       e.uci,
-    san:       e.move.san,
-    from:      e.move.from,
-    to:        e.move.to,
-    piece:     e.move.piece,      // 'p','n','b','r','q','k'
-    color:     e.move.color,      // 'w' or 'b'
-    prob:      e.prob,
-    see:       e.see,
+    uci: e.uci,
+    san: e.move.san,
+    from: e.move.from,
+    to: e.move.to,
+    piece: e.move.piece,      // 'p','n','b','r','q','k'
+    color: e.move.color,      // 'w' or 'b'
+    prob: e.prob,
+    see: e.see,
     evalPawns: e.evalPawns,
-    evalAbs:   isWhiteTurn ? e.evalPawns : -e.evalPawns, // White-relative for consistent dashboard display
+    evalAbs: isWhiteTurn ? e.evalPawns : -e.evalPawns, // White-relative for consistent dashboard display
     relativeDelta: (e.evalPawns - syncedObjectiveEval) * (isWhiteTurn ? 1 : -1),
     scoreMate: e.score_mate,
-    weighted:  e.bbiProb * e.evalPawns,
-    cpLoss:    Math.max(0, -((e.evalPawns - syncedObjectiveEval) * (isWhiteTurn ? 1 : -1))), // pawn units lost vs best play
-    isPruned:  e.isPruned,
+    weighted: e.bbiProb * e.evalPawns,
+    cpLoss: Math.max(0, -((e.evalPawns - syncedObjectiveEval) * (isWhiteTurn ? 1 : -1))), // pawn units lost vs best play
+    isPruned: e.isPruned,
     isHydrated: e.isHydrated || false,
     isHydrationCandidate: e.isHydrationCandidate || false,
     hydrationBoost: e.hydrationBoost || 0,
   }));
 
   const finalResult = { objectiveEval: syncedObjectiveEval, expectedEval, delta, grade, moveTable, fen, isForcedMate, scoreMate: objResult.score_mate, bestmove: objResult.bestmove, source };
-  
+
   // Save to cache
   await BBICache.set(cacheKey, finalResult);
 
   return finalResult;
 }
 
-const BBI_REVISION = '2026-03-25-v6'; // Increment to invalidate old logic/grading caches
+const BBI_REVISION = '2026-03-26-v8'; // Increment to invalidate old logic/grading caches
 function getCacheKey(fen, depth, seeThreshold) {
   return `${fen}|d${depth}|s${seeThreshold}|${BBI_REVISION}`;
 }

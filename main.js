@@ -42,7 +42,7 @@
 
   // Load DB first (it's large, start it early)
   const dbPromise = MAIA.loadExplorerDB('./models/explorer_db.json');
-  
+
   await MAIA.loadModel('./models/maia_rapid.onnx').then(async ok => {
     modelLoaded = ok;
     const statusEl = document.getElementById('model-status');
@@ -80,6 +80,14 @@
   document.getElementById('btn-reset').addEventListener('click', () => { UI.resetBoard(); UI.clearBlunderOverlay(); });
   document.getElementById('btn-undo').addEventListener('click', () => UI.undoMove());
   document.getElementById('btn-next').addEventListener('click', () => UI.nextMove());
+  document.getElementById('btn-recalculate').addEventListener('click', async () => {
+    const dScale = parseInt(document.getElementById('depth-slider').value, 10);
+    const sScale = parseFloat(document.getElementById('see-slider').value);
+    const cacheKey = BBI.getCacheKey(chess.fen(), dScale, sScale);
+    await BBI.Cache.remove(cacheKey);
+    await triggerBBIPipeline(chess.fen(), null);
+    UI.showToast('Position cache cleared and re-calculated.', 'success');
+  });
   document.getElementById('btn-clear-cache').addEventListener('click', async () => {
     isImporting = false;
     workerHelper.clearQueue();
@@ -106,15 +114,47 @@
   // Depth slider
   const depthSlider = document.getElementById('depth-slider');
   const depthLabel = document.getElementById('depth-label');
+
+  // Load depth from localStorage
+  const savedDepth = localStorage.getItem('bbi_depth');
+  if (savedDepth) {
+    depthSlider.value = savedDepth;
+    depthLabel.textContent = savedDepth;
+  }
+
   depthSlider.addEventListener('input', () => {
     depthLabel.textContent = depthSlider.value;
+  });
+  depthSlider.addEventListener('change', () => {
+    localStorage.setItem('bbi_depth', depthSlider.value);
   });
 
   // SEE threshold slider
   const seeSlider = document.getElementById('see-slider');
   const seeLabel = document.getElementById('see-label');
+
+  // Load pruning from localStorage
+  const savedSee = localStorage.getItem('bbi_see');
+  if (savedSee) {
+    seeSlider.value = savedSee;
+    const val = parseFloat(savedSee);
+    if (val <= -5.6) {
+      seeLabel.textContent = 'Off';
+    } else {
+      seeLabel.textContent = (val >= 0 ? '+' : '') + val;
+    }
+  }
+
   seeSlider.addEventListener('input', () => {
-    seeLabel.textContent = (parseFloat(seeSlider.value) >= 0 ? '+' : '') + seeSlider.value;
+    const val = parseFloat(seeSlider.value);
+    if (val <= -5.6) {
+      seeLabel.textContent = 'Off';
+    } else {
+      seeLabel.textContent = (val >= 0 ? '+' : '') + val;
+    }
+  });
+  seeSlider.addEventListener('change', () => {
+    localStorage.setItem('bbi_see', seeSlider.value);
   });
 
   // Player Perspective Mode toggle
@@ -148,12 +188,12 @@
     }
 
     const history = tempChess.history({ verbose: true });
-    
+
     // UI Progress Setup
     const progContainer = document.getElementById('pgn-progress-container');
     const progFill = document.getElementById('pgn-progress-fill');
     const progText = document.getElementById('pgn-progress-text');
-    
+
     progContainer.classList.remove('hidden');
     progFill.style.width = '0%';
     const progSpan = progText.querySelector('span');
@@ -161,27 +201,27 @@
 
     try {
       // Reset board to the PGN's starting position
-    const pgnHeader = tempChess.header();
-    const startFen = pgnHeader.FEN || 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
-    
-    UI.showToast(`Analyzing ${history.length} moves...`, 'info');
+      const pgnHeader = tempChess.header();
+      const startFen = pgnHeader.FEN || 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
 
-    // UI.loadFEN updates visual board and global chess state.
-    // We load it silently so it doesn't trigger its own non-silent pipeline which would abort our import.
-    const ok = UI.loadFEN(startFen, true); 
-    if (!ok) throw new Error("Failed to load starting FEN");
+      UI.showToast(`Analyzing ${history.length} moves...`, 'info');
 
-    // CRITICAL: Update currentFen so that the first move's retroactive evaluation 
-    // correctly targets the starting position.
-    currentFen = startFen; 
-    isImporting = true;
+      // UI.loadFEN updates visual board and global chess state.
+      // We load it silently so it doesn't trigger its own non-silent pipeline which would abort our import.
+      const ok = UI.loadFEN(startFen, true);
+      if (!ok) throw new Error("Failed to load starting FEN");
 
-    // Hydrate the initial starting position so its cache entry exists for the loop.
-    await triggerBBIPipeline(startFen, null);
+      // CRITICAL: Update currentFen so that the first move's retroactive evaluation 
+      // correctly targets the starting position.
+      currentFen = startFen;
+      isImporting = true;
+
+      // Hydrate the initial starting position so its cache entry exists for the loop.
+      await triggerBBIPipeline(startFen, null);
 
       // Use a fresh chess instance to step through
       const walkChess = new Chess(startFen);
-      
+
       progFill.style.width = `${(1 / (history.length + 1)) * 100}%`;
       progSpan.textContent = `1 / ${history.length + 1}`;
 
@@ -189,54 +229,54 @@
 
       // 2. Loop through moves
       for (let i = 0; i < history.length; i++) {
-          if (!isImporting) break;
+        if (!isImporting) break;
 
-          const move = history[i];
-          walkChess.move(move);
-          
-          // Hydrate silently with sub-move progress using CURRENT slider depth
-          const targetDepth = parseInt(document.getElementById('depth-slider').value, 10);
-          
-          let retries = 3; 
-          while (retries > 0 && isImporting) {
-            try {
-              await triggerBBIPipeline(walkChess.fen(), move, true, targetDepth, (pct) => {
-                  const currentCount = i + 2;
-                  const totalCount = history.length + 1;
-                  const subPct = Math.floor(pct * 99).toString().padStart(2, '0');
-                  progSpan.textContent = `${currentCount}.${subPct} / ${totalCount}`;
-                  
-                  // Smooth out the main bar: current base + sub-progress
-                  const totalPct = ((i + 1 + pct) / totalCount) * 100;
-                  progFill.style.width = `${totalPct}%`;
-              }, loopPrevFen);
-              break; // Success
-            } catch (e) {
-              // If interrupted by a foreground move, wait and retry this position
-              if (e.message === 'Interrupted' && isImporting) {
-                retries--;
-                await new Promise(r => setTimeout(r, 1000)); // Wait for the user's move to finish
-                continue;
-              }
-              throw e; 
+        const move = history[i];
+        walkChess.move(move);
+
+        // Hydrate silently with sub-move progress using CURRENT slider depth
+        const targetDepth = parseInt(document.getElementById('depth-slider').value, 10);
+
+        let retries = 3;
+        while (retries > 0 && isImporting) {
+          try {
+            await triggerBBIPipeline(walkChess.fen(), move, true, targetDepth, (pct) => {
+              const currentCount = i + 2;
+              const totalCount = history.length + 1;
+              const subPct = Math.floor(pct * 99).toString().padStart(2, '0');
+              progSpan.textContent = `${currentCount}.${subPct} / ${totalCount}`;
+
+              // Smooth out the main bar: current base + sub-progress
+              const totalPct = ((i + 1 + pct) / totalCount) * 100;
+              progFill.style.width = `${totalPct}%`;
+            }, loopPrevFen);
+            break; // Success
+          } catch (e) {
+            // If interrupted by a foreground move, wait and retry this position
+            if (e.message === 'Interrupted' && isImporting) {
+              retries--;
+              await new Promise(r => setTimeout(r, 1000)); // Wait for the user's move to finish
+              continue;
             }
+            throw e;
           }
-          
-          loopPrevFen = walkChess.fen();
-          
-          // Give the browser a moment to breathe/render/commit transactions
-          await new Promise(r => setTimeout(r, 500));
+        }
 
-          // final tick for this move AFTER the safety delay
-          progSpan.textContent = `${i + 2}.00 / ${history.length + 1}`;
-          progFill.style.width = `${((i + 2) / (history.length + 1)) * 100}%`;
-          
-          // Allow navigation to this move immediately as it's analyzed
-          UI.updateStatus();
+        loopPrevFen = walkChess.fen();
+
+        // Give the browser a moment to breathe/render/commit transactions
+        await new Promise(r => setTimeout(r, 500));
+
+        // final tick for this move AFTER the safety delay
+        progSpan.textContent = `${i + 2}.00 / ${history.length + 1}`;
+        progFill.style.width = `${((i + 2) / (history.length + 1)) * 100}%`;
+
+        // Allow navigation to this move immediately as it's analyzed
+        UI.updateStatus();
       }
 
       UI.showToast('Analysis complete!', 'success');
-      
+
       // Refresh the UI for the starting position to show hydrated grades/badges
       await triggerBBIPipeline(chess.fen(), null);
     } catch (err) {
@@ -262,64 +302,64 @@
 
   async function triggerBBIPipeline(fen, executedMove, silent = false, depthOverride = null, onHydrateProgress = null, prevFenOverride = null) {
     const pipelineId = ++currentPipelineId;
-    
+
     // Only interrupt the engine for foreground UI actions.
     // Background hydration (silent) should just add to the queue.
     // Only interrupt the *active* task for foreground UI actions.
     // This allows background hydration tasks to stay in the queue.
-    if (!silent) workerHelper.interruptActive(); 
+    if (!silent) workerHelper.interruptActive();
 
     if (!silent) {
       // Manual move/evaluation
-      UI.clearBestMoveArrow(); 
-      UI.clearScorePanel();    
+      UI.clearBestMoveArrow();
+      UI.clearScorePanel();
       UI.clearBlunderOverlay();
     }
 
     const prevFen = prevFenOverride || currentFen;
     const targetFen = fen || chess.fen();
-    
+
     if (!silent) {
-        currentFen = targetFen;
-        document.getElementById('fen-input').value = currentFen;
+      currentFen = targetFen;
+      document.getElementById('fen-input').value = currentFen;
     }
-    
+
     if (!modelLoaded) return;
 
     pipelineRunning = true;
     if (!silent) UI.showLoading(true, 'Evaluating position...', 0);
-    
+
     // --- Step 1: Immediate Navigation Tracking ---
     // Establish the "forward link" in the cache BEFORE the engine starts, 
     // so the UI can navigate even while background analysis is in progress.
     if (executedMove && prevFen) {
-        const dScale = parseInt(document.getElementById('depth-slider').value, 10);
-        const sScale = parseFloat(document.getElementById('see-slider').value);
-        const prevKey = BBI.getCacheKey(prevFen, dScale, sScale);
-        let prevCache = await BBI.Cache.get(prevKey);
-        
-        if (!prevCache) {
-          prevCache = {
-            fen: prevFen,
-            moveTable: [],
-            grade: '-',
-            depth: dScale,
-            timestamp: Date.now()
-          };
+      const dScale = parseInt(document.getElementById('depth-slider').value, 10);
+      const sScale = parseFloat(document.getElementById('see-slider').value);
+      const prevKey = BBI.getCacheKey(prevFen, dScale, sScale);
+      let prevCache = await BBI.Cache.get(prevKey);
+
+      if (!prevCache) {
+        prevCache = {
+          fen: prevFen,
+          moveTable: [],
+          grade: '-',
+          depth: dScale,
+          timestamp: Date.now()
+        };
+      }
+
+      const uci = executedMove.from + executedMove.to + (executedMove.promotion || '');
+      if (silent || !isImporting) {
+        prevCache.lastNavigatedUci = uci;
+        await BBI.Cache.set(prevKey, prevCache);
+
+        // If the user is currently viewing the position we just linked FROM, 
+        // refresh the button states immediately.
+        const currentViewKey = BBI.getCacheKey(currentFen, dScale, sScale);
+        if (prevKey === currentViewKey) {
+          UI.updateStatus();
         }
-        
-        const uci = executedMove.from + executedMove.to + (executedMove.promotion || '');
-        if (silent || !isImporting) {
-            prevCache.lastNavigatedUci = uci;
-            await BBI.Cache.set(prevKey, prevCache);
-            
-            // If the user is currently viewing the position we just linked FROM, 
-            // refresh the button states immediately.
-            const currentViewKey = BBI.getCacheKey(currentFen, dScale, sScale);
-            if (prevKey === currentViewKey) {
-                UI.updateStatus(); 
-            }
-        }
+      }
     }
 
     try {
@@ -348,7 +388,7 @@
         const sScale = parseFloat(document.getElementById('see-slider').value);
         const prevKey = BBI.getCacheKey(prevFen, dScale, sScale);
         let prevCache = await BBI.Cache.get(prevKey);
-        
+
         if (prevCache) {
           const uci = executedMove.from + executedMove.to + (executedMove.promotion || '');
           let mMatch = prevCache.moveTable.find(m => m.uci === uci);
@@ -367,7 +407,7 @@
             prevCache.moveTable.push(mMatch);
           }
           mMatch.futureGrade = result.grade;
-          
+
           await BBI.Cache.set(prevKey, prevCache);
 
           const currentViewKey = BBI.getCacheKey(currentFen, dScale, sScale);
@@ -452,7 +492,7 @@
     try {
       const count = await BBI.Cache.count();
       btn.title = `Clear ${count} analyzed positions from local storage`;
-      
+
       // Smoky and non-clickable if only the starting position exists
       if (count <= 1) {
         btn.classList.add('btn-inactive');

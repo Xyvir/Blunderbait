@@ -367,14 +367,13 @@ const UI = (() => {
       });
 
       // Explosion badge (bottom-center)
-      const badge = document.createElement('div');
-      const avgEval = group.reduce((sum, m) => sum + m.evalPawns, 0) / group.length;
+      const avgDelta = group.reduce((sum, m) => sum + m.relativeDelta, 0) / group.length;
 
       // Determine if this is an "improving" move or a "blunder" for styling
-      const isImproving = avgEval > 0.05;
+      const isImproving = avgDelta > 0.05;
       badge.className = 'blunder-badge' + (isImproving ? ' improving' : '');
 
-      let evalTxt = (Math.abs(avgEval) < 0.001) ? '=0' : (avgEval >= 0 ? '↑' : '↓') + Math.abs(avgEval).toFixed(1).replace(/\.0$/, '');
+      let evalTxt = (Math.abs(avgDelta) < 0.001) ? '=0' : (avgDelta >= 0 ? '↑' : '↓') + Math.abs(avgDelta).toFixed(1).replace(/\.0$/, '');
       
       const emoji = isImproving ? '' : '<span class="blunder-emoji">💥</span>';
       badge.innerHTML = `${emoji}<span class="blunder-cp">${evalTxt}</span>`;

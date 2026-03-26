@@ -389,11 +389,19 @@ const MAIA = (() => {
       console.warn(`[Maia] Dimension mismatch! Model output: ${logits.length}, Policy table: ${policyTable.length}`);
     }
 
-    // Apply Softmax
+    // Apply Softmax with NaN/Infinity protection
     const maxLogit = Math.max(...logits);
     const exps = Array.from(logits).map(x => Math.exp(x - maxLogit));
     const sumExp = exps.reduce((a, b) => a + b, 0);
-    const probs = exps.map(x => x / sumExp);
+
+    let probs;
+    if (isNaN(sumExp) || sumExp === 0 || !isFinite(sumExp)) {
+      console.warn('[Maia] NaN or Invalid sumExp detected in Softmax. Falling back to uniform.');
+      const uniform = 1 / logits.length;
+      probs = new Array(logits.length).fill(uniform);
+    } else {
+      probs = exps.map(x => x / sumExp);
+    }
 
     const legalMoves = chess.moves({ verbose: true });
     const legalUCISet = new Map();

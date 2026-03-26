@@ -118,10 +118,15 @@ function filterByPlausibility(chess, moveProbPairs, threshold = -2.0) {
  * Returns an array of verbose move objects.
  */
 function scanForHydration(chess, threshold = 2.5) {
-  return chess.moves({ verbose: true }).filter(m => {
+  const result = chess.moves({ verbose: true }).filter(m => {
     if (!m.captured) return false;
-    return computeSEE(chess, m) >= threshold;
+    const score = computeSEE(chess, m);
+    if (score >= threshold) {
+      console.log(`[SEE] Hydration Candidate Found: ${m.san} (score: ${score})`);
+    }
+    return score >= threshold;
   });
+  return result;
 }
 
 // Export for use as a plain script (no ES modules needed)

@@ -119,10 +119,14 @@ const UI = (() => {
   function updateScorePanel({ objectiveEval, expectedEval, delta, grade, isForcedMate, scoreMate }) {
     const turn = chess.turn();
     const fmtAdv = v => {
+      if (isNaN(v)) return '---';
       if (Math.abs(v) < 0.001) return '=0.00';
       return (v >= 0 ? '↑' : '↓') + Math.abs(v).toFixed(2);
     };
-    const fmtDelta = v => (v < 0 ? '-' : '') + Math.abs(v).toFixed(2);
+    const fmtDelta = v => {
+      if (isNaN(v)) return '---';
+      return (v < 0 ? '-' : '') + Math.abs(v).toFixed(2);
+    };
 
     // Standard engine notation for Objective Eval: + for White, - for Black
     // Standard engine notation for Objective Eval: White-is-Positive ALWAYS
@@ -135,8 +139,12 @@ const UI = (() => {
       const sign = absMate > 0 ? '+' : (absMate < 0 ? '-' : '');
       objValText = sign + 'M' + Math.abs(absMate);
     } else {
-      const objSign = absObj > 0 ? '+' : (absObj < 0 ? '-' : '');
-      objValText = objSign + Math.abs(absObj).toFixed(2);
+      if (isNaN(absObj)) {
+        objValText = '---';
+      } else {
+        const objSign = absObj > 0 ? '+' : (absObj < 0 ? '-' : '');
+        objValText = objSign + Math.abs(absObj).toFixed(2);
+      }
     }
 
     const objEl = document.getElementById('obj-eval');

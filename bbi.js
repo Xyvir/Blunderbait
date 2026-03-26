@@ -417,6 +417,7 @@ async function runPipeline(chess, workerHelper, options = {}) {
 
   tickProgress();
   let objectiveEval = cpToPawns(objResult.score_cp, objResult.score_mate, turn);
+  if (isNaN(objectiveEval)) objectiveEval = 0.0;
   const isForcedMate = objResult.score_mate != null;
 
   // --- Step 4: Evaluate each plausible move via Stockfish ---
@@ -471,23 +472,35 @@ async function runPipeline(chess, workerHelper, options = {}) {
   // If individualized move searches found a better result than the root search, use that as the baseline.
   // This ensures the dashboard doesn't contradict the move list.
   const bestMoveVal = normalizedEvaluated.length > 0 ? normalizedEvaluated.reduce((max, e) => (e.evalPawns > max ? e.evalPawns : max), -30.0) : objectiveEval;
-  const syncedObjectiveEval = (Math.abs(bestMoveVal - objectiveEval) > 0.05) ? bestMoveVal : objectiveEval;
+  const syncedObjectiveEval = (Math.abs(bestMoveVal - objectiveEval) > 0.05 && !isNaN(bestMoveVal)) ? bestMoveVal : objectiveEval;
   
   console.log(`[BBI] Objective Eval: ${objectiveEval.toFixed(2)}, Best Move Eval: ${bestMoveVal.toFixed(2)}, Synced: ${syncedObjectiveEval.toFixed(2)}`);
 
   // --- Step 4.7: SEE Hydration Implementation ---
   // Compare high-SEE moves against Maia's preferred choice (original top probability move)
   const maiaBestMove = normalizedEvaluated.find(e => e.uci === maiaTopUCI);
-  const maiaBestEval = maiaBestMove ? maiaBestMove.evalPawns : objectiveEval;
+  
+  // FALLBACK: If Maia's top move was pruned or filtered, find the next highest probability move that was evaluated.
+  let referenceMove = maiaBestMove;
+  if (!referenceMove && normalizedEvaluated.length > 0) {
+    referenceMove = [...normalizedEvaluated].sort((a, b) => b.prob - a.prob)[0];
+    console.log(`[BBI] Maia Top Move ${maiaTopUCI} not evaluated. Using ${referenceMove.uci} as hydration reference.`);
+  }
+
+  const maiaBestEval = referenceMove ? referenceMove.evalPawns : objectiveEval;
+  const safeMaiaBestEval = isNaN(maiaBestEval) ? objectiveEval : maiaBestEval;
+  const safeEffectiveProb = isFinite(effectiveMaiaTopProb) ? effectiveMaiaTopProb : 0;
+
+  console.log(`[BBI] Hydration Reference: ${referenceMove ? referenceMove.uci : 'Objective'} (Eval: ${safeMaiaBestEval.toFixed(2)}), effectiveMaiaTopProb: ${(safeEffectiveProb * 100).toFixed(1)}%`);
 
   let hydrationApplied = false;
   let finalEvaluatedList = normalizedEvaluated.map(e => {
-    if (e.isHydrationCandidate && e.evalPawns > (maiaBestEval + 0.1)) {
+    if (e.isHydrationCandidate && e.evalPawns > (safeMaiaBestEval + 0.1)) {
       // Use effectiveMaiaTopProb for a much stronger hydration effect
-      const boost = (e.evalPawns - maiaBestEval) * effectiveMaiaTopProb;
-      if (boost > 0) {
+      const boost = (e.evalPawns - safeMaiaBestEval) * safeEffectiveProb;
+      if (boost > 0 && isFinite(boost)) {
         hydrationApplied = true;
-        console.log(`[BBI] Hydrating move ${e.uci}: eval=${e.evalPawns.toFixed(2)} vs maiaBest=${maiaBestEval.toFixed(2)}, boost=${boost.toFixed(4)}`);
+        console.log(`[BBI] Hydrating move ${e.uci}: eval=${e.evalPawns.toFixed(2)} vs maiaBest=${safeMaiaBestEval.toFixed(2)}, boost=${boost.toFixed(4)}`);
         return { ...e, prob: e.prob + boost, isHydrated: true, hydrationBoost: boost };
       }
     }
@@ -496,7 +509,15 @@ async function runPipeline(chess, workerHelper, options = {}) {
 
   if (hydrationApplied) {
     console.log(`[BBI] SEE Hydration successfully applied to ${finalEvaluatedList.filter(e => e.isHydrated).length} moves.`);
+    
+    // RE-NORMALIZE to ensure Expected Eval doesn't explode
+    const newSum = finalEvaluatedList.reduce((sum, e) => sum + (isNaN(e.prob) ? 0 : e.prob), 0);
+    if (newSum > 0 && isFinite(newSum)) {
+      finalEvaluatedList = finalEvaluatedList.map(e => ({ ...e, prob: (e.prob || 0) / newSum }));
+    }
   }
+
+  console.log(`[BBI] Final Move Table Probabilities:`, finalEvaluatedList.map(e => `${e.uci}: ${(e.prob * 100).toFixed(1)}%`));
 
   // --- Step 4.8: Lumbra's Opening Book Hydration (Hybrid: Prune & Recalculate) ---
   // If we are in Hybrid mode, the book move is pulled out of the model's distribution
@@ -509,12 +530,23 @@ async function runPipeline(chess, workerHelper, options = {}) {
     if (bookMovesList.length > 0 && alternatives.length > 0) {
       // 2. Re-normalize alternatives to sum to 1.0 (to find the true "alternative world")
       const altSum = alternatives.reduce((sum, e) => sum + e.prob, 0);
-      const normalizedAlts = alternatives.map(e => ({ ...e, prob: e.prob / altSum }));
+      let normalizedAlts;
+      if (altSum > 0 && isFinite(altSum)) {
+        normalizedAlts = alternatives.map(e => ({ ...e, prob: e.prob / altSum }));
+      } else {
+        // Fallback: If alternatives are all 0% (Maia extremely confident in book move), 
+        // treat them as uniform for the sake of finding the "best" tactical alternative.
+        const uniform = 1 / alternatives.length;
+        normalizedAlts = alternatives.map(e => ({ ...e, prob: uniform }));
+      }
       
-      // 3. Find the best alternative
-      const altTopMove = normalizedAlts.reduce((prev, curr) => (curr.prob > prev.prob ? curr : prev));
+      // 3. Find the best alternative (highest probability, then highest eval)
+      const altTopMove = normalizedAlts.reduce((prev, curr) => {
+        if (Math.abs(curr.prob - prev.prob) < 0.001) return (curr.evalPawns > prev.evalPawns ? curr : prev);
+        return (curr.prob > prev.prob ? curr : prev);
+      });
       const altTopEval = altTopMove.evalPawns;
-      const altTopProb = altTopMove.prob;
+      const altTopProb = (altSum > 0) ? altTopMove.prob : (1 / alternatives.length);
 
       // 4. Recalculate book move probabilities
       const updatedBookMoves = bookMovesList.map(bm => {

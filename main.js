@@ -288,6 +288,39 @@
 
     pipelineRunning = true;
     if (!silent) UI.showLoading(true, 'Evaluating position...', 0);
+    
+    // --- Step 1: Immediate Navigation Tracking ---
+    // Establish the "forward link" in the cache BEFORE the engine starts, 
+    // so the UI can navigate even while background analysis is in progress.
+    if (executedMove && prevFen) {
+        const dScale = parseInt(document.getElementById('depth-slider').value, 10);
+        const sScale = parseFloat(document.getElementById('see-slider').value);
+        const prevKey = BBI.getCacheKey(prevFen, dScale, sScale);
+        let prevCache = await BBI.Cache.get(prevKey);
+        
+        if (!prevCache) {
+          prevCache = {
+            fen: prevFen,
+            moveTable: [],
+            grade: '-',
+            depth: dScale,
+            timestamp: Date.now()
+          };
+        }
+        
+        const uci = executedMove.from + executedMove.to + (executedMove.promotion || '');
+        if (silent || !isImporting) {
+            prevCache.lastNavigatedUci = uci;
+            await BBI.Cache.set(prevKey, prevCache);
+            
+            // If the user is currently viewing the position we just linked FROM, 
+            // refresh the button states immediately.
+            const currentViewKey = BBI.getCacheKey(currentFen, dScale, sScale);
+            if (prevKey === currentViewKey) {
+                UI.updateStatus(); 
+            }
+        }
+    }
 
     try {
       const depth = depthOverride || parseInt(document.getElementById('depth-slider').value, 10);
@@ -309,34 +342,15 @@
       // We explicitly skip this check for silent background tasks so they can finish their cache work.
       if (!silent && currentPipelineId !== pipelineId) return;
 
-      // Retroactively add this position's grade to the previous move's cache!
+      // Step 2: Retroactive grading (requires engine results)
       if (executedMove && prevFen) {
         const dScale = parseInt(document.getElementById('depth-slider').value, 10);
         const sScale = parseFloat(document.getElementById('see-slider').value);
         const prevKey = BBI.getCacheKey(prevFen, dScale, sScale);
         let prevCache = await BBI.Cache.get(prevKey);
         
-        if (!prevCache) {
-          // Create basic shell entry so navigation metadata is preserved 
-          // even if the position wasn't fully hydrated yet.
-          prevCache = {
-            fen: prevFen,
-            moveTable: [],
-            grade: '-',
-            depth: dScale,
-            timestamp: Date.now()
-          };
-        }
-
         if (prevCache) {
           const uci = executedMove.from + executedMove.to + (executedMove.promotion || '');
-          
-          // 1. Track navigation (Safety: Do not let manual moves overwrite the PGN path during import)
-          if (silent || !isImporting) {
-            prevCache.lastNavigatedUci = uci;
-          }
-
-          // 2. Retroactive grading
           let mMatch = prevCache.moveTable.find(m => m.uci === uci);
           if (!mMatch) {
             mMatch = {
@@ -356,8 +370,6 @@
           
           await BBI.Cache.set(prevKey, prevCache);
 
-          // If the user is currently looking at the position we just hydrated, 
-          // refresh the board badges dynamically!
           const currentViewKey = BBI.getCacheKey(currentFen, dScale, sScale);
           if (silent && prevKey === currentViewKey) {
             UI.renderBlunderOverlay(prevCache.moveTable, prevCache.objectiveEval || 0);
